@@ -79,14 +79,14 @@ module.exports = async function (fastify, opts) {
     });
 
     fastify.post('/personas/sync', async (request, reply) => {
-        const { id, filename, name, tag, text } = request.body;
+        const personaData = request.body;
         const personas = await readDB();
 
-        const existingIdx = personas.findIndex(p => p.id === id);
+        const existingIdx = personas.findIndex(p => p.id === personaData.id);
         if (existingIdx > -1) {
-            personas[existingIdx] = { ...personas[existingIdx], filename, name, tag, text };
+            personas[existingIdx] = { ...personas[existingIdx], ...personaData };
         } else {
-            personas.push({ id, filename, name, tag, text });
+            personas.push(personaData);
         }
 
         await writeDB(personas);

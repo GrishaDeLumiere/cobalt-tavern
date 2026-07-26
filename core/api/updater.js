@@ -1,3 +1,4 @@
+// ФАЙЛ: server/api/updater.js
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -62,6 +63,12 @@ async function syncDirectories(source, target) {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function runUpdateStream(res) {
+    if (process.env.NODE_ENV === 'development') {
+        res.write(`data: ${JSON.stringify({ error: "КРИТИЧЕСКАЯ ЗАЩИТА: ОБНОВЛЕНИЕ ЗАПРЕЩЕНО В РЕЖИМЕ DEV СОХРАНЕНИЯ GIT" })}\n\n`);
+        res.end();
+        return;
+    }
+
     const sendLog = (msg, type = 'info') => res.write(`data: ${JSON.stringify({ msg, type })}\n\n`);
 
     try {
@@ -116,6 +123,15 @@ async function runUpdateStream(res) {
 
 module.exports = async function (fastify, opts) {
     fastify.get('/check-update', async (request, reply) => {
+        if (process.env.NODE_ENV === 'development') {
+            return {
+                updateAvailable: false,
+                currentVersion: CURRENT_VERSION + ' [DEV РЕЖИМ]',
+                latestVersion: 'DEV',
+                error: 'АВАРИЙНАЯ ЗАЩИТА: РАБОТА С GIT-ВЕТКОЙ'
+            };
+        }
+
         try {
             const response = await axios.get('https://raw.githubusercontent.com/GrishaDeLumiere/cobalt-tavern/main/core/package.json', { timeout: 5000 });
             const latestVersion = response.data.version;

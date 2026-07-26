@@ -71,7 +71,9 @@ module.exports = {
 
         let systemPrompt = "";
         const claudeMessages = [];
+
         for (const msg of messages) {
+            // Клод принимает системный промпт отдельно на верхнем уровне JSON, а не в массиве
             if (msg.role === 'system') {
                 const text = Array.isArray(msg.content)
                     ? msg.content.map(c => c.text || '').join('\n')
@@ -81,6 +83,8 @@ module.exports = {
             }
 
             const contentArray = [];
+
+            // Если контент уже массив (из чужого парсера), перебираем его
             if (Array.isArray(msg.content)) {
                 for (const part of msg.content) {
                     if (part.type === 'text' && part.text) {
@@ -96,8 +100,8 @@ module.exports = {
                         }
                     }
                 }
-            }
-            else {
+            } else {
+                // Если контент строка (стандарт), мапим картинки
                 if (Array.isArray(msg.images)) {
                     msg.images.forEach(imgUrl => {
                         const match = imgUrl.match(/^data:(.*?);base64,(.*)$/);
@@ -115,11 +119,19 @@ module.exports = {
             }
 
             const safeRole = msg.role === 'assistant' ? 'assistant' : 'user';
+
+            // ЗАЩИТА ОТ КРАША КЛОДА (он ненавидит пустые строки)
+            let finalContent = contentArray.length > 0 ? contentArray : (msg.content || '...');
+            if (typeof finalContent === 'string' && finalContent.trim() === '') {
+                finalContent = '...';
+            }
+
             claudeMessages.push({
                 role: safeRole,
-                content: contentArray.length > 0 ? contentArray : (msg.content || '')
+                content: finalContent
             });
         }
+
         if (prefillTag) {
             claudeMessages.push({
                 role: 'assistant',
@@ -134,10 +146,15 @@ module.exports = {
             max_tokens: samplers.max_tokens || 4096,
             temperature: samplers.temperature,
             top_p: samplers.top_p,
+            top_k: samplers.top_k,
             system: systemPrompt,
             messages: claudeMessages,
             stream: isStreaming
         };
+
+        if (payload.top_k === undefined || payload.top_k === null) {
+            delete payload.top_k;
+        }
 
         let response;
         try {

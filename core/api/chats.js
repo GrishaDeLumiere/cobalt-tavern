@@ -39,6 +39,23 @@ const buildChatsIndex = async () => {
     console.log('[CACHE] Построение индекса сессий...');
     const chatsDir = getChatsDir();
     let chats = [];
+
+    let customTagsRegExps = [];
+    try {
+        const aiRaw = await fs.readFile(path.join(ROOT_DATA_DIR, DEFAULT_USER, 'ai_settings.json'), 'utf-8');
+        const aiData = JSON.parse(aiRaw);
+        if (Array.isArray(aiData?.presets)) {
+            aiData.presets.forEach(p => {
+                if (p.reasoning_open_tag && p.reasoning_open_tag !== '<think>') {
+                    const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\@@@CODEBLOCK1@@@amp;');
+                    const O = escapeRegExp(p.reasoning_open_tag);
+                    const C = p.reasoning_close_tag ? escapeRegExp(p.reasoning_close_tag) : O.replace('<', '</');
+                    customTagsRegExps.push(new RegExp(`${O}[\\s\\S]*?(${C}|$)`, 'g'));
+                }
+            });
+        }
+    } catch (e) { }
+
     try {
         const charDirs = await fs.readdir(chatsDir, { withFileTypes: true });
         for (const dirent of charDirs) {
@@ -64,7 +81,13 @@ const buildChatsIndex = async () => {
 
                                 if (msgsCount > 0) {
                                     const lastMsg = JSON.parse(lines[lines.length - 1]);
-                                    preview = lastMsg.mes?.replace(/<[^>]+>/g, '').substring(0, 100) || preview;
+
+                                    let cleanMes = lastMsg.mes || '';
+                                    cleanMes = cleanMes.replace(/<(think|thought|reasoning|details|s)>[\s\S]*?(<\/\1>|$)/gi, '');
+                                    customTagsRegExps.forEach(rx => {
+                                        cleanMes = cleanMes.replace(rx, '');
+                                    });
+                                    preview = cleanMes.replace(/<[^>]+>/g, '').trim().substring(0, 200) || preview;
 
                                     let foundDate = parseAnyDate(lastMsg.send_date) || parseAnyDate(lastMsg.gen_finished);
                                     if (!foundDate && lastMsg.swipe_info?.length > 0) {
@@ -389,9 +412,11 @@ module.exports = async function (fastify, opts) {
 
         for await (const part of files) {
             const buffer = await part.toBuffer();
-            const ext = path.extname(part.filename) || '.png';
 
-            const safeName = crypto.randomBytes(8).toString('hex') + Date.now() + ext;
+            let ext = path.extname(part.filename);
+            if (!ext) ext = part.mimetype.startsWith('image/') ? '.png' : '.bin';
+
+            const safeName = crypto.randomBytes(8).toString('hex') + '_' + Date.now() + ext;
             const fullPath = path.join(attachDir, safeName);
 
             await fs.writeFile(fullPath, buffer);
