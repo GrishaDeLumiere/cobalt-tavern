@@ -53,6 +53,10 @@
   <img width="48%" src="./core-ui/screen3.jpg" alt="Cobalt Tavern">
    &nbsp;
   <img width="48%" src="./core-ui/screen4.jpg" alt="Cobalt Tavern">
+    &nbsp;
+  <img width="48%" src="./core-ui/screen5.jpg" alt="Cobalt Tavern">
+    &nbsp;
+  <img width="48%" src="./core-ui/screen6.jpg" alt="Cobalt Tavern">
 </p>
 
 ## 💻 Системные требования
