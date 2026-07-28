@@ -163,6 +163,7 @@ const buildPrompt = async (payload) => {
                     for (let index = 0; index < totalMsgs; index++) {
                         const m = chat.messages[index];
                         if (m.is_system) continue;
+                        if (m.isHidden) continue;
 
                         if (m.is_user && m.name) {
                             historicalUserName = m.name;
