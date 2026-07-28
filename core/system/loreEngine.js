@@ -110,6 +110,8 @@ const scanLorebooks = async (chatMessages, charLorebookIds, globalLorebookIds, c
     }
 
     let allNodes = [];
+    let uiIndexCounter = 0;
+
     loadedBooks.forEach(book => {
         book.categories?.forEach(cat => {
             cat.entries?.forEach(node => {
@@ -119,7 +121,8 @@ const scanLorebooks = async (chatMessages, charLorebookIds, globalLorebookIds, c
                         _bookId: book.id,
                         _bookBudget: book.budget || 2048,
                         _isCharBook: book.isCharBook,
-                        _isGlobalBook: book.isGlobalBook
+                        _isGlobalBook: book.isGlobalBook,
+                        _uiIndex: uiIndexCounter++
                     });
                 }
             });
@@ -235,7 +238,13 @@ const scanLorebooks = async (chatMessages, charLorebookIds, globalLorebookIds, c
     }
 
     // --- РАСПРЕДЕЛЕНИЕ ПО ЗОНАМ И ВЫВОД ---
-    finalNodes.sort((a, b) => (a.order || 100) - (b.order || 100));
+    finalNodes.sort((a, b) => {
+        const orderA = a.order !== undefined ? a.order : 100;
+        const orderB = b.order !== undefined ? b.order : 100;
+
+        if (orderA !== orderB) return orderA - orderB;
+        return (a._uiIndex || 0) - (b._uiIndex || 0);
+    });
 
     const result = {
         before: [],
