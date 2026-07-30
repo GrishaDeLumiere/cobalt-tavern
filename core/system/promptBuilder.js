@@ -18,7 +18,6 @@ const applyPostProcessing = (messages, mode) => {
         if ((mode === 'semi_strict' || mode === 'strict') && role === 'system') {
             role = 'user';
         }
-        // Сохраняем массив изображений при маппинге
         processed.push({ ...msg, role, images: msg.images || [] });
     });
 
@@ -32,7 +31,6 @@ const applyPostProcessing = (messages, mode) => {
         } else {
             if (currentGroup.role === msg.role) {
                 currentGroup.content += `\n\n${msg.content}`;
-                // Если у узлов есть картинки — склеиваем их массивы
                 if (msg.images && msg.images.length > 0) {
                     currentGroup.images.push(...msg.images);
                 }
@@ -60,7 +58,6 @@ const applyPostProcessing = (messages, mode) => {
 
 // --- ГЛАВНАЯ ФУНКЦИЯ СБОРКИ ---
 const buildPrompt = async (payload) => {
-    // Получаем postProcessing из Payload (приходит из профиля подключения)
     const { chatId, presetId, charId, personaId, sysConfig, postProcessing = 'none' } = payload;
 
     const chatsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'chats');
@@ -68,8 +65,8 @@ const buildPrompt = async (payload) => {
     const charsDbPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_db.json');
     const personasDbPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'personas_db.json');
 
-    // 1. Читаем всё с диска
-    let chat = { messages: [], character_name: 'System', user_name: 'User' };
+    // 1. Читаем всё с диска (теперь вытаскиваем метадату чата!)
+    let chat = { messages: [], character_name: 'System', user_name: 'User', chat_metadata: {} };
     if (chatId) {
         try {
             const chatRaw = await fs.readFile(path.join(chatsDir, decodeURIComponent(chatId)), 'utf-8');
@@ -77,6 +74,7 @@ const buildPrompt = async (payload) => {
             const meta = JSON.parse(lines[0]);
             chat.character_name = meta.character_name;
             chat.user_name = meta.user_name || 'User';
+            chat.chat_metadata = meta.chat_metadata || {};
             chat.messages = lines.slice(1).map(l => JSON.parse(l));
         } catch (e) { console.error('[BUILDER] Ошибка чтения чата:', e.message); }
     }
@@ -87,12 +85,20 @@ const buildPrompt = async (payload) => {
     } catch (e) { throw new Error('Не удалось загрузить AI Preset'); }
 
     let character = null;
-    if (charId) {
-        try {
-            const charsDb = JSON.parse(await fs.readFile(charsDbPath, 'utf-8'));
-            character = charsDb.characters.find(c => c.id === charId);
-        } catch (e) { }
-    }
+    try {
+        const finalCharId = charId || chat.chat_metadata?.character_id;
+        const charsDb = JSON.parse(await fs.readFile(charsDbPath, 'utf-8'));
+
+        if (finalCharId) {
+            character = charsDb.characters.find(c => c.id === finalCharId);
+        }
+
+        if (!character && chat.character_name) {
+            character = charsDb.characters.find(c =>
+                (c.name || '').toLowerCase() === chat.character_name.toLowerCase()
+            );
+        }
+    } catch (e) { console.error('[BUILDER] Сбой чтения базы персонажей'); }
 
     let persona = null;
     if (personaId) {
@@ -155,11 +161,9 @@ const buildPrompt = async (payload) => {
                     const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\@@@CODEBLOCK0@@@amp;');
                     const thinkRegex = new RegExp(`${escapeRegExp(openTag)}[\\s\\S]*?(${escapeRegExp(closeTag)}|$)`, 'gi');
 
-                    // === 1. ИНИЦИАЛИЗИРУЕМ ЛИМИТЫ ОДИН РАЗ ===
                     const VISION_DEPTH_LIMIT = preset?.vision_depth !== undefined ? parseInt(preset.vision_depth, 10) : 5;
                     const totalMsgs = chat.messages.length;
 
-                    // === 2. ЗАПУСКАЕМ АСИНХРОННЫЙ ЦИКЛ ===
                     for (let index = 0; index < totalMsgs; index++) {
                         const m = chat.messages[index];
                         if (m.is_system) continue;

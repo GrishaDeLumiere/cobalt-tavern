@@ -1,3 +1,5 @@
+// ФАЙЛ: server/api/providers/google.js
+
 module.exports = {
     _normalize(url, key) {
         let baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
@@ -29,9 +31,7 @@ module.exports = {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const data = await res.json();
-        // Гугл возвращает { models: [ { name: "models/gemini-pro" } ] }
         if (data.models && Array.isArray(data.models)) {
-            // Очищаем префиксы для красоты списка
             return data.models.map(m => m.name.replace('models/', '').replace('publishers/google/models/', ''));
         }
         return [];
@@ -69,8 +69,6 @@ module.exports = {
             .map(m => m.content)
             .join('\n\n');
 
-        // Сборка диалога для Gemini
-        // Сборка диалога для Gemini (С поддержкой VISION API)
         const geminiContents = [];
         const chatMsgs = messages.filter(m => (m.role || '').toLowerCase() !== 'system');
 
@@ -78,7 +76,6 @@ module.exports = {
             const safeRole = (m.role || '').toLowerCase();
             const mappedRole = safeRole === 'assistant' ? 'model' : 'user';
 
-            // Генерируем массив частей для текущего узла (сначала текст, потом прикрепления)
             const newParts = [{ text: m.content }];
             if (m.images && m.images.length > 0) {
                 m.images.forEach(imgDataUrl => {
@@ -94,17 +91,14 @@ module.exports = {
                 });
             }
 
-            // Gemini ненавидит, когда идут 2 user или 2 model подряд, мы обязаны их мерджить
             if (geminiContents.length > 0 && geminiContents[geminiContents.length - 1].role === mappedRole) {
                 const targetMsg = geminiContents[geminiContents.length - 1];
-                // Текст клеим к первому 'text' part
                 if (targetMsg.parts[0].text !== undefined) {
                     targetMsg.parts[0].text += '\n\n' + m.content;
                 } else {
                     targetMsg.parts.push({ text: '\n\n' + m.content });
                 }
 
-                // Картинки перекидываем в конец
                 if (newParts.length > 1) {
                     targetMsg.parts.push(...newParts.slice(1));
                 }
@@ -133,7 +127,20 @@ module.exports = {
                 maxOutputTokens: samplers.max_tokens,
                 temperature: samplers.temperature,
                 topP: samplers.top_p
-            }
+            },
+            safetySettings: [
+                { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
+                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
+                { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "OFF" },
+                { category: "HARM_CATEGORY_JAILBREAK", threshold: "OFF" },
+                // Фильтры для картинок
+                { category: "HARM_CATEGORY_IMAGE_HATE", threshold: "OFF" },
+                { category: "HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT", threshold: "OFF" },
+                { category: "HARM_CATEGORY_IMAGE_HARASSMENT", threshold: "OFF" },
+                { category: "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT", threshold: "OFF" }
+            ]
         };
 
         if (systemLines.trim()) {
@@ -142,9 +149,6 @@ module.exports = {
             };
         }
 
-        // ==========================================
-        // ЛОГИКА REASONING EFFORT (GOOGLE GEMINI)
-        // ==========================================
         if (samplers.reasoning_effort && samplers.reasoning_effort !== 'auto') {
             let effort = samplers.reasoning_effort;
             const isGemini3 = model.includes('gemini-3');
@@ -179,25 +183,43 @@ module.exports = {
                 signal: signal
             });
         } catch (err) {
-            if (!replyRaw.writableEnded) {
+            if (!replyRaw.headersSent) {
+                replyRaw.statusCode = 500;
+                replyRaw.setHeader('Content-Type', 'application/json');
+                replyRaw.end(JSON.stringify({ error: { message: "Google Fetch Error: " + err.message } }));
+            } else if (!replyRaw.writableEnded) {
                 replyRaw.write(`data: ${JSON.stringify({ error: "Google Fetch Error: " + err.message })}\n\n`);
                 replyRaw.end();
             }
             return;
         }
 
+        // ==========================================
+        //  ПАРСИНГ HTTP ОШИБОК (ДО СТРИМА)
+        // ==========================================
         if (!response.ok) {
             const errText = await response.text();
-            if (!replyRaw.writableEnded) {
-                replyRaw.write(`data: ${JSON.stringify({ error: errText.slice(0, 500) })}\n\n`);
+            let errMsg = errText.slice(0, 500);
+            try {
+                const errJson = JSON.parse(errText);
+                if (errJson.error && errJson.error.message) {
+                    errMsg = errJson.error.message;
+                }
+            } catch (e) { /* сырой текст */ }
+
+            console.error(`[GEMINI HTTP ERROR] ${response.status}: ${errMsg}`);
+
+            if (!replyRaw.headersSent) {
+                replyRaw.statusCode = response.status;
+                replyRaw.setHeader('Content-Type', 'application/json');
+                replyRaw.end(JSON.stringify({ error: { message: `Gemini API Error (${response.status}): ${errMsg}` } }));
+            } else if (!replyRaw.writableEnded) {
+                replyRaw.write(`data: ${JSON.stringify({ error: `Ошибка API (${response.status}): ${errMsg}` })}\n\n`);
                 replyRaw.end();
             }
             return;
         }
 
-        // ==========================================
-        // Парсинг без стриминга
-        // ==========================================
         if (!isStreaming) {
             try {
                 const data = await response.json();
@@ -219,11 +241,56 @@ module.exports = {
         }
 
         // ==========================================
-        // Парсинг стрима
+        // ПАРСИНГ СТРИМА (ЛОВИТ ЦЕНЗУРУ И ОБРЫВЫ БЕЗ ДЫР)
         // ==========================================
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
+
+        const processChunk = (line) => {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data: ')) return;
+            if (trimmed === 'data: [DONE]') return;
+
+            try {
+                const data = JSON.parse(trimmed.slice(6));
+
+                if (data.error) {
+                    throw new Error(data.error.message || JSON.stringify(data.error));
+                }
+
+                const candidate = data.candidates?.[0];
+                if (!candidate) return;
+
+                const finishReason = candidate.finishReason;
+                if (finishReason && finishReason !== 'STOP') {
+                    let reasonAlert = `ОБРЫВ ГЕНЕРАЦИИ - ${finishReason}`;
+
+                    if (finishReason === 'SAFETY') {
+                        reasonAlert = `Сработал фильтр цензуры Gemini (SAFETY)`;
+                        console.warn('[GEMINI] Сработала цензура (SAFETY)');
+                    } else if (finishReason === 'MAX_TOKENS') {
+                        reasonAlert = `Достигнут лимит токенов (MAX_TOKENS)`;
+                    } else if (finishReason === 'RECITATION') {
+                        reasonAlert = `Копирайт-блокировка (RECITATION)`;
+                    }
+
+                    if (!replyRaw.writableEnded) {
+                        replyRaw.write(`data: ${JSON.stringify({ error: reasonAlert })}\n\n`);
+                    }
+                    return;
+                }
+
+                const chunk = candidate.content?.parts?.[0]?.text;
+                if (chunk && !replyRaw.writableEnded) {
+                    replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                }
+            } catch (e) {
+                if (e.message && !e.message.includes('JSON')) {
+                    throw e;
+                }
+            }
+        };
 
         try {
             while (true) {
@@ -235,26 +302,23 @@ module.exports = {
                 buffer = lines.pop();
 
                 for (const line of lines) {
-                    const trimmed = line.trim();
-                    if (trimmed.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(trimmed.slice(6));
-                            const chunk = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                            if (chunk && !replyRaw.writableEnded) {
-                                replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
-                            }
-                        } catch (e) { /* Игнорим битые чанки */ }
-                    }
+                    processChunk(line);
                 }
             }
+
+            if (buffer.trim()) {
+                processChunk(buffer);
+            }
+
         } catch (err) {
             if (err.name === 'AbortError' || (err.message && err.message.toLowerCase().includes('aborted'))) {
                 console.log('[GOOGLE PROVIDER] Генерация успешно прервана юзером.');
                 try { reader.cancel().catch(() => { }); } catch (e) { }
                 return;
             }
+            console.error(`[GEMINI STREAM ERROR] ${err.message}`);
             if (!replyRaw.writableEnded && !replyRaw.destroyed) {
-                replyRaw.write(`data: ${JSON.stringify({ error: "Gemini Stream Error: " + err.message })}\n\n`);
+                replyRaw.write(`data: ${JSON.stringify({ error: "Обрыв потока Gemini: " + err.message })}\n\n`);
             }
         } finally {
             if (!replyRaw.writableEnded && !replyRaw.destroyed) {
