@@ -1,5 +1,6 @@
 const fs = require('fs/promises');
 const path = require('path');
+const { defaultThemePresets } = require('./defaultPresets');
 
 // Корневая директория, где будет лежать вся база
 const ROOT_DATA_DIR = path.join(__dirname, '../../data');
@@ -15,20 +16,58 @@ const USER_DIRS = [
     'fonts'
 ];
 
+// Дефолтный конфиг приложения (настройки)
 const defaultSettings = {
-    accountName: 'User',
+    accountName: 'GHOST',
     language: 'ru-ru',
     theme: {
         accentColor: '#66ccff',
-        panelColor: '#000000',
-        panelColor2: '#0a0014',
-        panelOpacity: 60,
+        gradientColors: ['#000000', '#001229'],
+        panelOpacity: 80,
         gradientAngle: 135,
-        useGradient: false
+        useGradient: true,
+        bgDim: 18,
+        bgBloom: 10,
+        bgFitting: 'cover',
+        baseTextColor: '#ced6e0',
+        textColor: '#f5f237',
+        thoughtColor: '#808080',
+        boldColor: '#ffffff',
+        thoughtAltColor: '#a0a0a0',
+        soundColor: '#ff9900',
+        whisperColor: '#cc99ff',
+        fontFamily: 'Cinzel',
+        fontSize: 15,
+        enableSmartTracker: false,
+        workspaceWidth: 1400,
+        fullWidth: false
     },
     render: {
-        soundEnabled: false
+        soundEnabled: false,
+        notifyAiDoneBackground: false
     }
+};
+
+const defaultBackgroundsConfig = {
+    folders: [
+        {
+            "id": "f_1784655827215",
+            "name": "Стандартные",
+            "color": "#1a1a24",
+            "isExpanded": true
+        }
+    ],
+    backgrounds: [
+        {
+            "id": "bg_1784655587512_9phd7",
+            "name": "Альпы",
+            "filename": "bg_1784655587512_9phd7.jpg",
+            "url": `/data/${DEFAULT_USER}/backgrounds/bg_1784655587512_9phd7.jpg`,
+            "active": true,
+            "folderId": "f_1784655827215",
+            "color": "#1a1a24"
+        }
+    ]
 };
 
 async function checkAndCreateDir(dirPath) {
@@ -43,26 +82,52 @@ async function checkAndCreateDir(dirPath) {
 async function initializeFilesystem() {
     console.log('[SYS_INIT] Холодный запуск файловой подсистемы...');
 
-    // 1. Поднимаем рут-папку /data
     await checkAndCreateDir(ROOT_DATA_DIR);
 
-    // 2. Создаем контейнер дефолтного юзера
     const userDirPath = path.join(ROOT_DATA_DIR, DEFAULT_USER);
     await checkAndCreateDir(userDirPath);
 
-    // 3. Разворачиваем всю архитектуру папок внутри юзера
     for (const dir of USER_DIRS) {
         await checkAndCreateDir(path.join(userDirPath, dir));
     }
 
-    // 4. Проверяем или создаем дефолтный конфиг пользователя
+    // 1. Профиль (settings.json)
     const settingsPath = path.join(userDirPath, 'settings.json');
     try {
         await fs.access(settingsPath);
-        console.log('[SYS_INIT] Профиль юзера найден. Интеграция успешна.');
     } catch (e) {
         await fs.writeFile(settingsPath, JSON.stringify(defaultSettings, null, 4), 'utf-8');
         console.log('[SYS_INIT] Создан дефолтный системный профиль: settings.json');
+    }
+
+    // 2. Пресеты тем (theme_presets.json)
+    const presetsPath = path.join(userDirPath, 'theme_presets.json');
+    try {
+        await fs.access(presetsPath);
+    } catch (e) {
+        await fs.writeFile(presetsPath, JSON.stringify(defaultThemePresets, null, 4), 'utf-8');
+        console.log('[SYS_INIT] Сгенерирован пак ААА-пресетов тем: theme_presets.json');
+    }
+
+    // 3. БАЗА ФОНОВ (backgrounds.json) И КОПИРОВАНИЕ КАРТИНКИ
+    const bgsPath = path.join(userDirPath, 'backgrounds.json');
+    try {
+        await fs.access(bgsPath);
+        console.log('[SYS_INIT] База фонов найдена. Интеграция успешна.');
+    } catch (e) {
+        // Создаем JSON конфиг с Альпами
+        await fs.writeFile(bgsPath, JSON.stringify(defaultBackgroundsConfig, null, 4), 'utf-8');
+        console.log('[SYS_INIT] Сгенерирована база фонов: backgrounds.json');
+
+        // Магия: копируем физический файл картинки из исходников в рабочую папку
+        try {
+            const sourceImgPath = path.join(__dirname, 'assets', 'bg_1784655587512_9phd7.jpg');
+            const destImgPath = path.join(userDirPath, 'backgrounds', 'bg_1784655587512_9phd7.jpg');
+            await fs.copyFile(sourceImgPath, destImgPath);
+            console.log('[SYS_INIT] Дефолтный фон "Альпы" успешно загружен в систему.');
+        } catch (imgError) {
+            console.log('\n[SYS_INIT_WARN] ВНИМАНИЕ: Не удалось найти дефолтную картинку фона!');
+        }
     }
 
     console.log('[SYS_INIT] Файловая система готова к работе. Aegis Shield: ON\n');

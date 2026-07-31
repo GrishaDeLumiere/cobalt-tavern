@@ -30,6 +30,32 @@ module.exports = async function (fastify, opts) {
         }
     });
 
+    fastify.get('/system/theme_presets', async (request, reply) => {
+        try {
+            const presetsPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'theme_presets.json');
+            try {
+                const data = await fs.readFile(presetsPath, 'utf-8');
+                return JSON.parse(data);
+            } catch (err) {
+                if (err.code === 'ENOENT') return [];
+                throw err;
+            }
+        } catch (err) {
+            return reply.code(500).send({ error: 'Failed to read theme presets' });
+        }
+    });
+
+    fastify.post('/system/theme_presets', async (request, reply) => {
+        try {
+            const presets = request.body;
+            const presetsPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'theme_presets.json');
+            await fs.writeFile(presetsPath, JSON.stringify(presets, null, 4), 'utf-8');
+            return { success: true };
+        } catch (err) {
+            return reply.code(500).send({ error: 'Failed to save theme presets' });
+        }
+    });
+
     // АВАТАР
     fastify.post('/system/avatar', async (request, reply) => {
         try {
