@@ -156,4 +156,23 @@ module.exports = async function (fastify, opts) {
         await writeDB(filtered);
         return { success: true };
     });
+
+    fastify.post('/personas/copy_avatar', async (request, reply) => {
+        const { source, destination } = request.body;
+        if (!source || !destination) return { success: false };
+
+        const sourcePath = path.join(avatarsDir, source);
+        const destPath = path.join(avatarsDir, destination);
+
+        try {
+            await fs.access(sourcePath);
+            await fs.copyFile(sourcePath, destPath);
+            return {
+                success: true,
+                avatarUrl: `/data/${DEFAULT_USER}/avatars/${encodeURIComponent(destination)}?v=${Date.now()}`
+            };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
 };

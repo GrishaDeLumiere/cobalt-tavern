@@ -113,4 +113,23 @@ module.exports = async function (fastify, opts) {
             return { success: false };
         }
     });
+
+    fastify.post('/characters/copy_avatar', async (request) => {
+        const { source, destination } = request.body;
+        if (!source || !destination) return { success: false };
+
+        const sourcePath = path.join(avatarsDir, source);
+        const destPath = path.join(avatarsDir, destination);
+
+        try {
+            await fs.access(sourcePath);
+            await fs.copyFile(sourcePath, destPath);
+            return {
+                success: true,
+                avatarUrl: `/data/${DEFAULT_USER}/characters/${encodeURIComponent(destination)}?v=${Date.now()}`
+            };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
 };
