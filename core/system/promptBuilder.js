@@ -112,9 +112,23 @@ const buildPrompt = async (payload) => {
     const userName = persona?.name || chat.user_name || 'User';
     const sharedVariables = { local: new Map(), global: new Map() };
 
-    // 2. Сканируем ЛОР через Lore Engine
+    const openTag = preset?.reasoning_open_tag || '<think>';
+    const closeTag = preset?.reasoning_close_tag || '</think>';
+    const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const thinkRegex = new RegExp(`${escapeRegExp(openTag)}[\\s\\S]*?(${escapeRegExp(closeTag)}|$)`, 'gi');
+
+    // Очищаем чат (для сообщений ассистента вырезаем теги мыслей)
+    const cleanMessages = chat.messages.map(m => {
+        let text = m.mes || '';
+        if (!m.is_user && text.includes(openTag)) {
+            text = text.replace(thinkRegex, '').trim();
+        }
+        return { ...m, mes: text };
+    });
+
+    // 2. Сканируем ЛОР через Lore Engine (ИСПОЛЬЗУЕМ ОЧИЩЕННЫЙ ЧАТ)
     const lore = await scanLorebooks(
-        chat.messages,
+        cleanMessages,
         character?.lorebooks || [],
         sysConfig?.activeLorebooks || [],
         sysConfig?.loreConfig || {}
@@ -156,16 +170,11 @@ const buildPrompt = async (payload) => {
                     let historyMsgs = [];
                     let historicalUserName = userName;
 
-                    const openTag = preset?.reasoning_open_tag || '<think>';
-                    const closeTag = preset?.reasoning_close_tag || '</think>';
-                    const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\@@@CODEBLOCK0@@@amp;');
-                    const thinkRegex = new RegExp(`${escapeRegExp(openTag)}[\\s\\S]*?(${escapeRegExp(closeTag)}|$)`, 'gi');
-
                     const VISION_DEPTH_LIMIT = preset?.vision_depth !== undefined ? parseInt(preset.vision_depth, 10) : 5;
-                    const totalMsgs = chat.messages.length;
+                    const totalMsgs = cleanMessages.length;
 
                     for (let index = 0; index < totalMsgs; index++) {
-                        const m = chat.messages[index];
+                        const m = cleanMessages[index];
                         if (m.is_system) continue;
                         if (m.isHidden) continue;
 
@@ -174,9 +183,6 @@ const buildPrompt = async (payload) => {
                         }
 
                         let rawText = m.mes || '';
-                        if (!m.is_user && rawText.includes(openTag)) {
-                            rawText = rawText.replace(thinkRegex, '').trim();
-                        }
 
                         const resolvedContent = resolveTemplateVariables(rawText, {
                             charName,

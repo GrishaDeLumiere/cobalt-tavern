@@ -249,6 +249,8 @@ const scanLorebooks = async (chatMessages, charLorebookIds, globalLorebookIds, c
     const result = {
         before: [],
         after: [],
+        beforeNodes: [],
+        afterNodes: [],
         injections: []
     };
 
@@ -271,16 +273,21 @@ const scanLorebooks = async (chatMessages, charLorebookIds, globalLorebookIds, c
             });
         } else if (pos.includes('↑')) {
             result.before.push(node.text);
+            result.beforeNodes.push(node);
         } else if (pos.includes('↓')) {
             result.after.push(node.text);
+            result.afterNodes.push(node);
         } else {
             result.before.push(node.text);
+            result.beforeNodes.push(node);
         }
     }
 
     return {
         before: result.before.join('\n\n'),
         after: result.after.join('\n\n'),
+        beforeNodes: result.beforeNodes,
+        afterNodes: result.afterNodes,
         injections: result.injections
     };
 };

@@ -1,6 +1,7 @@
 // ФАЙЛ: server/api/lorebooks.js
 const fs = require('fs/promises');
 const path = require('path');
+const { scanLorebooks } = require('../system/loreEngine');
 const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
 
 const ensureDir = async (dirPath) => {
@@ -86,6 +87,18 @@ module.exports = async function (fastify, opts) {
             return { success: true };
         } catch (e) {
             return reply.code(404).send({ error: 'Файл не найден' });
+        }
+    });
+
+    fastify.post('/lorebooks/simulate', async (request, reply) => {
+        const { messages = [], charLorebookIds = [], globalLorebookIds = [], config = {} } = request.body;
+
+        try {
+            const result = await scanLorebooks(messages, charLorebookIds, globalLorebookIds, config);
+            return result;
+        } catch (err) {
+            fastify.log.error('[LORE SIMULATION ERROR]', err);
+            reply.code(500).send({ error: 'Lore engine simulation failed' });
         }
     });
 };
