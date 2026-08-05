@@ -9,6 +9,7 @@ const fastify = require('fastify')({
 });
 
 const path = require('path');
+const { exec } = require('child_process');
 const { initializeFilesystem } = require('./system/init');
 
 // Тестовый эндпоинт для проверки связи
@@ -23,14 +24,12 @@ fastify.get('/ping', async (request, reply) => {
 // === ФУНКЦИЯ ХОЛОДНОГО СТАРТА ЯДРА ===
 const startSystem = async () => {
     try {
-        // 1. Выстраиваем файловую архитектуру (ЗДЕСЬ AWAIT ЗАКОНЕН)
+        // 1. Выстраиваем файловую архитектуру
         await initializeFilesystem();
 
         // 2. Инжектим плагины Fastify для работы с файлами
         fastify.register(require('@fastify/multipart'), {
-            limits: {
-                fileSize: 262144000 // 250 MB
-            }
+            limits: { fileSize: 262144000 } // 250 MB
         });
 
         fastify.register(require('@fastify/static'), {
@@ -50,10 +49,10 @@ const startSystem = async () => {
                 reply.sendFile('index.html');
             });
         } else {
-            console.log('[SYS_INIT] Режим РАЗРАБОТКИ (VS Code). Раздача статики отключена.');
+            console.log('[SYS_INIT] Режим РАЗРАБОТКИ. Раздача статики отключена.');
         }
 
-        // 3. Подключаем наши API модули
+        // 3. Подключаем API модули
         fastify.register(require('./api/system'), { prefix: '/api' });
         fastify.register(require('./api/backgrounds'), { prefix: '/api' });
         fastify.register(require('./api/connections'), { prefix: '/api' });
@@ -63,19 +62,34 @@ const startSystem = async () => {
         fastify.register(require('./api/lorebooks'), { prefix: '/api' });
         fastify.register(require('./api/chats'), { prefix: '/api' });
         fastify.register(require('./api/syntax'), { prefix: '/api' });
-
         fastify.register(require('./api/updater'), { prefix: '/api' });
         fastify.register(require('./api/llm'), { prefix: '/api' });
         fastify.register(require('./api/tokenizer'), { prefix: '/api' });
 
-
-        // 4. Поднимаем вычислительный узел
         fastify.get('/thumbnail', (req, reply) => {
             reply.redirect(`/api/thumbnail?file=${req.query.file || ''}`);
         });
+
+        // 4. Поднимаем вычислительный узел
         await fastify.listen({ port: 8000, host: '0.0.0.0' });
+
         console.log('\n[COBALT CORE] Главное ядро запущено. Ожидание сигналов...');
         console.log('[COBALT CORE] REST Gateway: http://localhost:8000\n');
+
+        // 5. ОТКРЫТИЕ БРАУЗЕРА (Только если не дев-режим)
+        if (!isDev) {
+            console.log('[SYSTEM] Launching terminal in browser...');
+            const url = 'http://127.0.0.1:8000/';
+
+            if (process.platform === 'win32') {
+                exec(`start ${url}`);
+            } else if (process.platform === 'darwin') {
+                exec(`open ${url}`);
+            } else {
+                exec(`xdg-open ${url}`);
+            }
+        }
+
     } catch (err) {
         fastify.log.error(err);
         process.exit(1);
