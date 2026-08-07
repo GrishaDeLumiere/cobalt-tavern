@@ -56,6 +56,39 @@ const applyPostProcessing = (messages, mode) => {
     return merged;
 };
 
+// --- ИНЖЕКТОР АВТОРСКИХ ЗАМЕТОК (A/N) ---
+const injectAuthorNote = (globalNodes, depthNodes, chatMetadata, cleanMessages) => {
+    const authorNote = chatMetadata?.author_note;
+    if (!authorNote || !authorNote.text) return { globalNodes, depthNodes };
+
+    const notePayload = {
+        text: authorNote.text,
+        role: authorNote.role || 'system',
+        isAuthorNote: true
+    };
+
+    if (authorNote.position === 'before') {
+        globalNodes.push({ ...notePayload, injection_position: 0, injection_order: -9999 });
+    } else if (authorNote.position === 'after') {
+        globalNodes.push({ ...notePayload, injection_position: 0, injection_order: 9999 });
+    } else { // Режим 'depth'
+        if (authorNote.interval > 0) {
+            const userMsgsCount = cleanMessages.filter(m => m.is_user && !m.is_system && !m.isHidden).length;
+            let shouldInject = (authorNote.interval === 1) || (userMsgsCount > 0 && (userMsgsCount % authorNote.interval) === 0);
+
+            if (shouldInject) {
+                depthNodes.push({
+                    ...notePayload,
+                    injection_depth: authorNote.depth || 1,
+                    injection_order: 9999
+                });
+            }
+        }
+    }
+
+    return { globalNodes, depthNodes };
+};
+
 // --- ГЛАВНАЯ ФУНКЦИЯ СБОРКИ ---
 const buildPrompt = async (payload) => {
     const { chatId, presetId, charId, personaId, sysConfig, postProcessing = 'none' } = payload;
@@ -142,12 +175,19 @@ const buildPrompt = async (payload) => {
         });
     });
 
-    const globalNodes = allNodes.filter(n => n.injection_position === 0).sort((a, b) => a.injection_order - b.injection_order);
+    let globalNodes = allNodes.filter(n => n.injection_position === 0);
     let depthNodes = allNodes.filter(n => n.injection_position === 1);
+
     if (lore.injections && lore.injections.length > 0) {
         depthNodes = depthNodes.concat(lore.injections);
     }
-    depthNodes.sort((a, b) => a.injection_order - b.injection_order);
+
+    // ИНЖЕКЦИЯ АВТОРСКИХ ЗАМЕТОК
+    const injectedData = injectAuthorNote(globalNodes, depthNodes, chat.chat_metadata, cleanMessages);
+
+    // СОРТИРУЕМ УЖЕ ГОТОВЫЙ МАССИВ С УЧЕТОМ ЗАМЕТОК И ЛОРА
+    globalNodes = injectedData.globalNodes.sort((a, b) => a.injection_order - b.injection_order);
+    depthNodes = injectedData.depthNodes.sort((a, b) => a.injection_order - b.injection_order);
 
     const rawPayload = [];
 

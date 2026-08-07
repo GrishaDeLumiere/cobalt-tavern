@@ -15,6 +15,17 @@ const providers = {
     'claude': claudeProvider
 };
 
+// === БАЗА ЛОГОВ ШЛЮЗА (В ПАМЯТИ) ===
+const apiLogs = [];
+const addGatewayLog = (logData) => {
+    apiLogs.unshift({
+        id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        timestamp: new Date().toLocaleTimeString(),
+        ...logData
+    });
+    if (apiLogs.length > 15) apiLogs.pop();
+};
+
 module.exports = async function (fastify, opts) {
 
     const getProvider = (apiType) => {
@@ -126,6 +137,8 @@ module.exports = async function (fastify, opts) {
                 reply.raw.write(`data: ${JSON.stringify({ chunk: openTag + '\n' })}\n\n`);
             }
 
+            const startTime = Date.now();
+
             await provider.generateStream({
                 url: connection.url,
                 key: connection.key,
@@ -137,7 +150,18 @@ module.exports = async function (fastify, opts) {
                 },
                 replyRaw: reply.raw,
                 prefillTag: usePrefill ? openTag : null,
-                signal: abortController.signal
+                signal: abortController.signal,
+
+                onLog: (rawRequest, rawResponse, errorStatus) => {
+                    const duration = ((Date.now() - startTime) / 1000).toFixed(2) + 's';
+                    addGatewayLog({
+                        model: connection.model || connection.apiType,
+                        status: errorStatus || '200 OK',
+                        duration,
+                        request: rawRequest,
+                        response: rawResponse
+                    });
+                }
             });
 
             if (!reply.raw.writableEnded) {
@@ -153,5 +177,9 @@ module.exports = async function (fastify, opts) {
             reply.raw.write(`data: {"error": "${error.message}"}\n\n`);
             reply.raw.end();
         }
+    });
+
+    fastify.get('/llm/logs', async (request, reply) => {
+        return apiLogs;
     });
 };

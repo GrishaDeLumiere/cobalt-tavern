@@ -55,7 +55,7 @@ module.exports = {
         return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'ПУСТОЙ ОТВЕТ';
     },
 
-    async generateStream({ url, key, model, messages, samplers, replyRaw, prefillTag, signal }) {
+    async generateStream({ url, key, model, messages, samplers, replyRaw, prefillTag, signal, onLog }) {
         const { baseUrl, headers } = this._normalize(url, key);
         const isStreaming = samplers.stream !== false;
 
@@ -135,7 +135,6 @@ module.exports = {
                 { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
                 { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "OFF" },
                 { category: "HARM_CATEGORY_JAILBREAK", threshold: "OFF" },
-                // Фильтры для картинок
                 { category: "HARM_CATEGORY_IMAGE_HATE", threshold: "OFF" },
                 { category: "HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT", threshold: "OFF" },
                 { category: "HARM_CATEGORY_IMAGE_HARASSMENT", threshold: "OFF" },
@@ -174,7 +173,14 @@ module.exports = {
             }
         }
 
+        // ==========================================
+        // ДАТЧИКИ ДЛЯ КОНСОЛИ ШЛЮЗА
+        // ==========================================
         let response;
+        let fullGeneratedText = "";
+        let errorStatus = null;
+        let rawResponseData = null;
+
         try {
             response = await fetch(endpoint, {
                 method: 'POST',
@@ -183,6 +189,10 @@ module.exports = {
                 signal: signal
             });
         } catch (err) {
+            errorStatus = '500 FETCH ERROR';
+            rawResponseData = { error: { message: "Google Fetch Error: " + err.message } };
+            if (onLog) onLog(payload, rawResponseData, errorStatus);
+
             if (!replyRaw.headersSent) {
                 replyRaw.statusCode = 500;
                 replyRaw.setHeader('Content-Type', 'application/json');
@@ -209,6 +219,10 @@ module.exports = {
 
             console.error(`[GEMINI HTTP ERROR] ${response.status}: ${errMsg}`);
 
+            errorStatus = `${response.status} ERROR`;
+            rawResponseData = { error: { message: errMsg, raw: errText } };
+            if (onLog) onLog(payload, rawResponseData, errorStatus);
+
             if (!replyRaw.headersSent) {
                 replyRaw.statusCode = response.status;
                 replyRaw.setHeader('Content-Type', 'application/json');
@@ -220,18 +234,26 @@ module.exports = {
             return;
         }
 
+        // ==========================================
+        // ВЕТКА БЕЗ СТРИМИНГА
+        // ==========================================
         if (!isStreaming) {
             try {
                 const data = await response.json();
-                const fullText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                rawResponseData = data;
+                fullGeneratedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
                 if (!replyRaw.writableEnded) {
-                    replyRaw.write(`data: ${JSON.stringify({ chunk: fullText })}\n\n`);
+                    replyRaw.write(`data: ${JSON.stringify({ chunk: fullGeneratedText })}\n\n`);
                 }
             } catch (err) {
+                errorStatus = '500 PARSE ERROR';
+                rawResponseData = { error: "Gemini Parse Error" };
                 if (!replyRaw.writableEnded) {
                     replyRaw.write(`data: ${JSON.stringify({ error: "Gemini Parse Error" })}\n\n`);
                 }
             } finally {
+                if (onLog) onLog(payload, rawResponseData, errorStatus);
+
                 if (!replyRaw.writableEnded) {
                     replyRaw.write(`data: [DONE]\n\n`);
                     replyRaw.end();
@@ -265,6 +287,7 @@ module.exports = {
                 const finishReason = candidate.finishReason;
                 if (finishReason && finishReason !== 'STOP') {
                     let reasonAlert = `ОБРЫВ ГЕНЕРАЦИИ - ${finishReason}`;
+                    errorStatus = `200 STOPPED (${finishReason})`;
 
                     if (finishReason === 'SAFETY') {
                         reasonAlert = `Сработал фильтр цензуры Gemini (SAFETY)`;
@@ -282,8 +305,11 @@ module.exports = {
                 }
 
                 const chunk = candidate.content?.parts?.[0]?.text;
-                if (chunk && !replyRaw.writableEnded) {
-                    replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                if (chunk) {
+                    fullGeneratedText += chunk; // Накапливаем текст
+                    if (!replyRaw.writableEnded) {
+                        replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                    }
                 }
             } catch (e) {
                 if (e.message && !e.message.includes('JSON')) {
@@ -313,14 +339,24 @@ module.exports = {
         } catch (err) {
             if (err.name === 'AbortError' || (err.message && err.message.toLowerCase().includes('aborted'))) {
                 console.log('[GOOGLE PROVIDER] Генерация успешно прервана юзером.');
+                errorStatus = '499 ABORTED';
+                fullGeneratedText += '\n[ПРЕРВАНО ПОЛЬЗОВАТЕЛЕМ]';
                 try { reader.cancel().catch(() => { }); } catch (e) { }
-                return;
-            }
-            console.error(`[GEMINI STREAM ERROR] ${err.message}`);
-            if (!replyRaw.writableEnded && !replyRaw.destroyed) {
-                replyRaw.write(`data: ${JSON.stringify({ error: "Обрыв потока Gemini: " + err.message })}\n\n`);
+            } else {
+                console.error(`[GEMINI STREAM ERROR] ${err.message}`);
+                errorStatus = '500 STREAM ERROR';
+                rawResponseData = { error: err.message };
+
+                if (!replyRaw.writableEnded && !replyRaw.destroyed) {
+                    replyRaw.write(`data: ${JSON.stringify({ error: "Обрыв потока Gemini: " + err.message })}\n\n`);
+                }
             }
         } finally {
+            if (!rawResponseData) {
+                rawResponseData = { candidates: [{ content: { parts: [{ text: fullGeneratedText }] } }] };
+            }
+            if (onLog) onLog(payload, rawResponseData, errorStatus);
+
             if (!replyRaw.writableEnded && !replyRaw.destroyed) {
                 replyRaw.write(`data: [DONE]\n\n`);
                 replyRaw.end();

@@ -68,7 +68,7 @@ module.exports = {
         return data.choices?.[0]?.message?.content?.trim() || 'ПУСТОЙ ОТВЕТ';
     },
 
-    async generateStream({ url, key, model, messages, samplers, replyRaw, prefillTag, signal }) {
+    async generateStream({ url, key, model, messages, samplers, replyRaw, prefillTag, signal, onLog }) {
         const baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
         const headers = { 'Content-Type': 'application/json' };
         if (key) headers['Authorization'] = `Bearer ${key}`;
@@ -117,7 +117,14 @@ module.exports = {
             payload.reasoning_effort = effort;
         }
 
+        // ==========================================
+        // ДАТЧИКИ ДЛЯ КОНСОЛИ ШЛЮЗА
+        // ==========================================
         let response;
+        let fullGeneratedText = "";
+        let errorStatus = null;
+        let rawResponseData = null;
+
         try {
             response = await fetch(`${baseUrl}/chat/completions`, {
                 method: 'POST',
@@ -126,6 +133,10 @@ module.exports = {
                 signal: signal
             });
         } catch (err) {
+            errorStatus = '500 FETCH ERROR';
+            rawResponseData = { error: err.message };
+            if (onLog) onLog(payload, rawResponseData, errorStatus);
+
             if (!replyRaw.writableEnded) {
                 replyRaw.write(`data: ${JSON.stringify({ error: "Fetch Error: " + err.message })}\n\n`);
                 replyRaw.end();
@@ -135,6 +146,10 @@ module.exports = {
 
         if (!response.ok) {
             const errText = await extractError(response);
+            errorStatus = `${response.status} ERROR`;
+            rawResponseData = { error: errText };
+            if (onLog) onLog(payload, rawResponseData, errorStatus); // Пишем лог при 400/500 от API
+
             if (!replyRaw.writableEnded) {
                 replyRaw.write(`data: ${JSON.stringify({ error: errText })}\n\n`);
                 replyRaw.end();
@@ -148,15 +163,21 @@ module.exports = {
         if (!isStreaming) {
             try {
                 const data = await response.json();
-                const fullText = data.choices?.[0]?.message?.content || '';
+                rawResponseData = data; // Сохраняем сырой ответ
+                fullGeneratedText = data.choices?.[0]?.message?.content || '';
+
                 if (!replyRaw.writableEnded) {
-                    replyRaw.write(`data: ${JSON.stringify({ chunk: fullText })}\n\n`);
+                    replyRaw.write(`data: ${JSON.stringify({ chunk: fullGeneratedText })}\n\n`);
                 }
             } catch (err) {
+                errorStatus = '500 PARSE ERROR';
+                rawResponseData = { error: err.message };
                 if (!replyRaw.writableEnded) {
                     replyRaw.write(`data: ${JSON.stringify({ error: "Ошибка парсинга ответа: " + err.message })}\n\n`);
                 }
             } finally {
+                if (onLog) onLog(payload, rawResponseData, errorStatus); // Пишем лог не-стриминга
+
                 if (!replyRaw.writableEnded) {
                     replyRaw.write(`data: [DONE]\n\n`);
                     replyRaw.end();
@@ -188,6 +209,7 @@ module.exports = {
                             const data = JSON.parse(trimmed.slice(6));
                             const chunk = data.choices?.[0]?.delta?.content;
                             if (chunk !== undefined && chunk !== null) {
+                                fullGeneratedText += chunk; // Накапливаем текст стрима
                                 if (!replyRaw.writableEnded) {
                                     replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
                                 }
@@ -199,13 +221,22 @@ module.exports = {
         } catch (err) {
             if (err.name === 'AbortError' || (err.message && err.message.toLowerCase().includes('aborted'))) {
                 console.log('[AI PROVIDER] Генерация успешно прервана юзером.');
+                errorStatus = '499 ABORTED';
+                fullGeneratedText += '\n[ПРЕРВАНО ПОЛЬЗОВАТЕЛЕМ]';
                 try { reader.cancel().catch(() => { }); } catch (e) { }
-                return;
-            }
-            if (!replyRaw.writableEnded && !replyRaw.destroyed) {
-                replyRaw.write(`data: ${JSON.stringify({ error: "Stream Error: " + err.message })}\n\n`);
+            } else {
+                errorStatus = '500 STREAM ERROR';
+                rawResponseData = { error: err.message };
+                if (!replyRaw.writableEnded && !replyRaw.destroyed) {
+                    replyRaw.write(`data: ${JSON.stringify({ error: "Stream Error: " + err.message })}\n\n`);
+                }
             }
         } finally {
+            if (!rawResponseData) {
+                rawResponseData = { choices: [{ message: { content: fullGeneratedText } }] };
+            }
+            if (onLog) onLog(payload, rawResponseData, errorStatus);
+
             if (!replyRaw.writableEnded && !replyRaw.destroyed) {
                 replyRaw.write(`data: [DONE]\n\n`);
                 replyRaw.end();
