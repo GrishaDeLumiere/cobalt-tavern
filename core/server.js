@@ -65,6 +65,7 @@ const startSystem = async () => {
         fastify.register(require('./api/updater'), { prefix: '/api' });
         fastify.register(require('./api/llm'), { prefix: '/api' });
         fastify.register(require('./api/tokenizer'), { prefix: '/api' });
+        fastify.register(require('./api/author_notes'), { prefix: '/api' });
 
         fastify.get('/thumbnail', (req, reply) => {
             reply.redirect(`/api/thumbnail?file=${req.query.file || ''}`);

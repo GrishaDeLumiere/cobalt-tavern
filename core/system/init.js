@@ -1,3 +1,4 @@
+// ФАЙЛ: server/system/init.js
 const fs = require('fs/promises');
 const path = require('path');
 const { defaultThemePresets } = require('./defaultPresets');
@@ -70,6 +71,16 @@ const defaultBackgroundsConfig = {
     ]
 };
 
+const defaultAuthorNotesDb = {
+    globalDefault: {
+        text: '',
+        role: 'system',
+        position: 'depth',
+        depth: 1,
+        interval: 1
+    }
+};
+
 async function checkAndCreateDir(dirPath) {
     try {
         await fs.access(dirPath);
@@ -115,11 +126,9 @@ async function initializeFilesystem() {
         await fs.access(bgsPath);
         console.log('[SYS_INIT] База фонов найдена. Интеграция успешна.');
     } catch (e) {
-        // Создаем JSON конфиг с Альпами
         await fs.writeFile(bgsPath, JSON.stringify(defaultBackgroundsConfig, null, 4), 'utf-8');
         console.log('[SYS_INIT] Сгенерирована база фонов: backgrounds.json');
 
-        // Магия: копируем физический файл картинки из исходников в рабочую папку
         try {
             const sourceImgPath = path.join(__dirname, 'assets', 'bg_1784655587512_9phd7.jpg');
             const destImgPath = path.join(userDirPath, 'backgrounds', 'bg_1784655587512_9phd7.jpg');
@@ -128,6 +137,15 @@ async function initializeFilesystem() {
         } catch (imgError) {
             console.log('\n[SYS_INIT_WARN] ВНИМАНИЕ: Не удалось найти дефолтную картинку фона!');
         }
+    }
+
+    // 4. ИЗОЛИРОВАННАЯ БАЗА ЗАМЕТОК (author_notes.json)
+    const notesPath = path.join(userDirPath, 'author_notes.json');
+    try {
+        await fs.access(notesPath);
+    } catch (e) {
+        await fs.writeFile(notesPath, JSON.stringify(defaultAuthorNotesDb, null, 4), 'utf-8');
+        console.log('[SYS_INIT] Создана изолированная база заметок: author_notes.json');
     }
 
     console.log('[SYS_INIT] Файловая система готова к работе. Aegis Shield: ON\n');
