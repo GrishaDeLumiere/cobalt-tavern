@@ -164,7 +164,8 @@ const buildPrompt = async (payload) => {
         cleanMessages,
         character?.lorebooks || [],
         sysConfig?.activeLorebooks || [],
-        sysConfig?.loreConfig || {}
+        sysConfig?.loreConfig || {},
+        character
     );
 
     // 3. Вытаскиваем все активные ноды из пресета
@@ -265,24 +266,46 @@ const buildPrompt = async (payload) => {
                     }
 
                     // ВРЕЗАЕМ УЗЛЫ ГЛУБИНЫ (INJECTIONS)
-                    for (const dNode of depthNodes) {
-                        const depth = dNode.injection_depth || 0;
-                        let insertIndex = historyMsgs.length - depth;
-                        if (insertIndex < 0) insertIndex = 0;
+                    let finalHistoryMsgs = [];
+                    const totalHist = historyMsgs.length;
 
-                        let dContent = dNode.text || '';
+                    const maxInjectDepth = depthNodes.length > 0
+                        ? Math.max(...depthNodes.map(n => n.injection_depth !== undefined ? n.injection_depth : 0))
+                        : 0;
 
-                        if (dContent) {
-                            historyMsgs.splice(insertIndex, 0, {
-                                role: (dNode.role || 'System').toLowerCase(),
-                                content: resolveTemplateVariables(dNode.text || '', {
-                                    charName, userName, chat, character, persona, sysConfig, variables: sharedVariables
-                                })
+                    const startDepth = Math.max(totalHist > 0 ? totalHist - 1 : 0, maxInjectDepth);
+
+                    for (let currentDepth = startDepth; currentDepth >= 0; currentDepth--) {
+                        // 1. Сначала сообщение чата этой глубины
+                        const msgIndex = totalHist - 1 - currentDepth;
+                        if (msgIndex >= 0 && msgIndex < totalHist) {
+                            finalHistoryMsgs.push(historyMsgs[msgIndex]);
+                        }
+
+                        // 2. Затем инжекты (ПОСЛЕ сообщения)
+                        let currentNodes = depthNodes.filter(n => (n.injection_depth !== undefined ? n.injection_depth : 0) === currentDepth);
+                        if (currentNodes.length > 0) {
+                            currentNodes.sort((a, b) => {
+                                const ordA = a.injection_order !== undefined ? a.injection_order : 100;
+                                const ordB = b.injection_order !== undefined ? b.injection_order : 100;
+                                return ordA - ordB;
                             });
+
+                            for (const dNode of currentNodes) {
+                                let dContent = dNode.text || '';
+                                if (dContent) {
+                                    finalHistoryMsgs.push({
+                                        role: (dNode.role || 'System').toLowerCase(),
+                                        content: resolveTemplateVariables(dNode.text || '', {
+                                            charName, userName, chat, character, persona, sysConfig, variables: sharedVariables
+                                        })
+                                    });
+                                }
+                            }
                         }
                     }
 
-                    rawPayload.push(...historyMsgs);
+                    rawPayload.push(...finalHistoryMsgs);
                     continue;
             }
         } else {

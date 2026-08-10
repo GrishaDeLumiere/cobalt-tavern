@@ -91,10 +91,10 @@ module.exports = async function (fastify, opts) {
     });
 
     fastify.post('/lorebooks/simulate', async (request, reply) => {
-        const { messages = [], charLorebookIds = [], globalLorebookIds = [], config = {} } = request.body;
+        const { messages = [], charLorebookIds = [], globalLorebookIds = [], config = {}, character = null } = request.body;
 
         try {
-            const result = await scanLorebooks(messages, charLorebookIds, globalLorebookIds, config);
+            const result = await scanLorebooks(messages, charLorebookIds, globalLorebookIds, config, character);
             return result;
         } catch (err) {
             fastify.log.error('[LORE SIMULATION ERROR]', err);

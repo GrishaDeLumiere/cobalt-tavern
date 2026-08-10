@@ -79,10 +79,8 @@ const checkSecondaryKeys = (text, keysStr, logic, exactMatch, caseSensitive) => 
 /**
  * Главный метод сканирования ЛОРБУКОВ
  */
-const scanLorebooks = async (chatMessages, charLorebookIds, globalLorebookIds, config) => {
+const scanLorebooks = async (chatMessages, charLorebookIds, globalLorebookIds, config, character = null) => {
     const loreDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'lorebooks');
-
-    // Дефолтные настройки
     const cfg = {
         scanDepth: 10,
         recursion: 1,
@@ -90,11 +88,26 @@ const scanLorebooks = async (chatMessages, charLorebookIds, globalLorebookIds, c
         caseSensitive: false,
         exactMatch: true,
         recursiveScan: true,
+        scanCharData: false,
         ...config
     };
 
     const msgsToScan = chatMessages.slice(-cfg.scanDepth);
     let scanText = msgsToScan.map(m => m.mes).join('\n\n');
+
+    // --- GLOBAL SCAN ENGINE: ВШИВАЕМ КАРТОЧКУ В ТЕКСТ ДЛЯ СКАНИРОВАНИЯ ---
+    if (cfg.scanCharData && character) {
+        const charContext = [
+            character.name,
+            character.description,
+            character.personality,
+            character.scenario
+        ].filter(Boolean).join('\n\n');
+
+        if (charContext) {
+            scanText = charContext + '\n\n' + scanText;
+        }
+    }
 
     const uniqueIds = new Set([...charLorebookIds, ...globalLorebookIds]);
     const loadedBooks = [];
