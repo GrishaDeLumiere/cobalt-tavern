@@ -20,8 +20,8 @@ class CobaltMapper {
         env.names.user = ctx.name1Override || serverLayer.userName || 'User';
         env.names.char = ctx.name2Override || serverLayer.charName || 'System';
 
-        if (ctx.replaceCharacterCard && serverLayer.character) {
-            const char = serverLayer.character;
+        if (ctx.replaceCharacterCard) {
+            const char = serverLayer.character || {};
             const personaText = serverLayer.persona?.text || serverLayer.persona?.description || '';
             env.character = {
                 charPrompt: char.system || '',

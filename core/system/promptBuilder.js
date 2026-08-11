@@ -8,12 +8,19 @@ const { scanLorebooks } = require('./loreEngine');
 // --- ФУНКЦИЯ ПОСТОБРАБОТКИ ФИНАЛЬНОГО МАССИВА (STRICT / MERGE) ---
 const applyPostProcessing = (messages, mode) => {
     if (!messages || messages.length === 0) return [];
-    if (mode === 'none' || !mode) return messages;
+
+    // ШАГ 0: Вычищаем призрачные (пустые) сообщения!
+    const validMessages = messages.filter(msg =>
+        (msg.content && String(msg.content).trim() !== '') ||
+        (msg.images && msg.images.length > 0)
+    );
+
+    if (mode === 'none' || !mode) return validMessages;
 
     let processed = [];
 
     // Шаг 1: Трансформация ролей (semi_strict, strict превращают system в user)
-    messages.forEach(msg => {
+    validMessages.forEach(msg => {
         let role = (msg.role || 'system').toLowerCase();
         if ((mode === 'semi_strict' || mode === 'strict') && role === 'system') {
             role = 'user';
@@ -257,12 +264,14 @@ const buildPrompt = async (payload) => {
                             }
                         }
 
-                        historyMsgs.push({
-                            role: m.is_user ? 'user' : 'assistant',
-                            content: resolvedContent,
-                            name: m.is_user ? historicalUserName : charName,
-                            images: attachmentsBase64.length > 0 ? attachmentsBase64 : undefined
-                        });
+                        if (resolvedContent.trim() !== '' || attachmentsBase64.length > 0) {
+                            historyMsgs.push({
+                                role: m.is_user ? 'user' : 'assistant',
+                                content: resolvedContent,
+                                name: m.is_user ? historicalUserName : charName,
+                                images: attachmentsBase64.length > 0 ? attachmentsBase64 : undefined
+                            });
+                        }
                     }
 
                     // ВРЕЗАЕМ УЗЛЫ ГЛУБИНЫ (INJECTIONS)
@@ -294,12 +303,16 @@ const buildPrompt = async (payload) => {
                             for (const dNode of currentNodes) {
                                 let dContent = dNode.text || '';
                                 if (dContent) {
-                                    finalHistoryMsgs.push({
-                                        role: (dNode.role || 'System').toLowerCase(),
-                                        content: resolveTemplateVariables(dNode.text || '', {
-                                            charName, userName, chat, character, persona, sysConfig, variables: sharedVariables
-                                        })
+                                    const resolvedDContent = resolveTemplateVariables(dContent, {
+                                        charName, userName, chat, character, persona, sysConfig, variables: sharedVariables
                                     });
+
+                                    if (resolvedDContent.trim() !== '') {
+                                        finalHistoryMsgs.push({
+                                            role: (dNode.role || 'System').toLowerCase(),
+                                            content: resolvedDContent
+                                        });
+                                    }
                                 }
                             }
                         }
