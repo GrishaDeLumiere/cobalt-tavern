@@ -219,53 +219,51 @@ const buildPrompt = async (payload) => {
                     let historicalUserName = userName;
 
                     const VISION_DEPTH_LIMIT = preset?.vision_depth !== undefined ? parseInt(preset.vision_depth, 10) : 5;
-                    const totalMsgs = cleanMessages.length;
 
-                    for (let index = 0; index < totalMsgs; index++) {
+                    // 1. Отбираем только валидные (видимые) сообщения чата
+                    let validMessages = [];
+                    for (let index = 0; index < cleanMessages.length; index++) {
                         const m = cleanMessages[index];
-                        if (m.is_system) continue;
-                        if (m.isHidden) continue;
+                        if (m.is_system || m.isHidden) continue;
+                        validMessages.push({ originalIndex: index, message: m });
+                    }
+
+                    const totalValid = validMessages.length;
+
+                    // 2. Считаем смещение глубины (если ласт сообщение от AI, у юзера будет depth 0, у бота -1)
+                    const lastMsgIsAi = totalValid > 0 && !validMessages[totalValid - 1].message.is_user;
+                    const depthOffset = lastMsgIsAi ? 1 : 0;
+
+                    // 3. Формируем историю чата с жестко привязанной глубиной (depth)
+                    for (let i = 0; i < totalValid; i++) {
+                        const m = validMessages[i].message;
+                        const msgDepth = totalValid - 1 - i - depthOffset;
 
                         if (m.is_user && m.name) {
                             historicalUserName = m.name;
                         }
 
-                        let rawText = m.mes || '';
-
-                        const resolvedContent = resolveTemplateVariables(rawText, {
-                            charName,
-                            userName: historicalUserName,
-                            chat,
-                            character,
-                            persona,
-                            sysConfig,
-                            variables: sharedVariables
+                        const resolvedContent = resolveTemplateVariables(m.mes || '', {
+                            charName, userName: historicalUserName, chat, character, persona, sysConfig, variables: sharedVariables
                         });
 
                         let attachmentsBase64 = [];
-                        const isRecentNode = (totalMsgs - index) <= VISION_DEPTH_LIMIT;
-
-                        if (isRecentNode && preset?.send_attachments !== false && m.extra && Array.isArray(m.extra.attachments)) {
-                            const targetCharId = character?.id || 'unknown';
-                            const attachDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters', targetCharId, 'attachments');
-
+                        const isRecentNode = (totalValid - i) <= VISION_DEPTH_LIMIT;
+                        if (isRecentNode && preset?.send_attachments !== false && m.extra?.attachments) {
+                            const attachDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters', character?.id || 'unknown', 'attachments');
                             for (const filename of m.extra.attachments) {
                                 try {
                                     const buffer = await fs.readFile(path.join(attachDir, filename));
                                     const ext = path.extname(filename).toLowerCase();
-                                    const mime = ext === '.png' ? 'image/png' :
-                                        ext === '.webp' ? 'image/webp' :
-                                            ext === '.gif' ? 'image/gif' : 'image/jpeg';
-
+                                    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
                                     attachmentsBase64.push(`data:${mime};base64,${buffer.toString('base64')}`);
-                                } catch (err) {
-                                    console.warn('[VISION] Ошибка чтения вложения, игнор:', filename);
-                                }
+                                } catch (err) { }
                             }
                         }
 
                         if (resolvedContent.trim() !== '' || attachmentsBase64.length > 0) {
                             historyMsgs.push({
+                                depth: msgDepth,
                                 role: m.is_user ? 'user' : 'assistant',
                                 content: resolvedContent,
                                 name: m.is_user ? historicalUserName : charName,
@@ -274,30 +272,40 @@ const buildPrompt = async (payload) => {
                         }
                     }
 
-                    // ВРЕЗАЕМ УЗЛЫ ГЛУБИНЫ (INJECTIONS)
+                    // 4. ВРЕЗАЕМ УЗЛЫ ГЛУБИНЫ (INJECTIONS)
                     let finalHistoryMsgs = [];
-                    const totalHist = historyMsgs.length;
+                    const minHistoryDepth = historyMsgs.length > 0 ? historyMsgs[historyMsgs.length - 1].depth : 0;
+                    const endLoopDepth = Math.min(minHistoryDepth, 0);
 
                     const maxInjectDepth = depthNodes.length > 0
                         ? Math.max(...depthNodes.map(n => n.injection_depth !== undefined ? n.injection_depth : 0))
                         : 0;
 
-                    const startDepth = Math.max(totalHist > 0 ? totalHist - 1 : 0, maxInjectDepth);
+                    const startLoopDepth = Math.max(historyMsgs.length > 0 ? historyMsgs[0].depth : 0, maxInjectDepth);
 
-                    for (let currentDepth = startDepth; currentDepth >= 0; currentDepth--) {
-                        // 1. Сначала сообщение чата этой глубины
-                        const msgIndex = totalHist - 1 - currentDepth;
-                        if (msgIndex >= 0 && msgIndex < totalHist) {
-                            finalHistoryMsgs.push(historyMsgs[msgIndex]);
+                    for (let currentDepth = startLoopDepth; currentDepth >= endLoopDepth; currentDepth--) {
+
+                        // А) СНАЧАЛА пушим сообщение чата этой глубины (если есть)
+                        const chatMsg = historyMsgs.find(m => m.depth === currentDepth);
+                        if (chatMsg) {
+                            finalHistoryMsgs.push({ role: chatMsg.role, content: chatMsg.content, name: chatMsg.name, images: chatMsg.images });
                         }
 
-                        // 2. Затем инжекты (ПОСЛЕ сообщения)
+                        // Б) ПОТОМ пушим инжекты (сортируя их между собой по ордеру и роли)
                         let currentNodes = depthNodes.filter(n => (n.injection_depth !== undefined ? n.injection_depth : 0) === currentDepth);
                         if (currentNodes.length > 0) {
                             currentNodes.sort((a, b) => {
                                 const ordA = a.injection_order !== undefined ? a.injection_order : 100;
                                 const ordB = b.injection_order !== undefined ? b.injection_order : 100;
-                                return ordA - ordB;
+                                if (ordA !== ordB) return ordA - ordB;
+
+                                const roleWeight = (r) => {
+                                    const role = (r || 'system').toLowerCase();
+                                    if (role === 'system') return 0;
+                                    if (role === 'user') return 1;
+                                    return 2;
+                                };
+                                return roleWeight(a.role) - roleWeight(b.role);
                             });
 
                             for (const dNode of currentNodes) {
@@ -306,12 +314,8 @@ const buildPrompt = async (payload) => {
                                     const resolvedDContent = resolveTemplateVariables(dContent, {
                                         charName, userName, chat, character, persona, sysConfig, variables: sharedVariables
                                     });
-
                                     if (resolvedDContent.trim() !== '') {
-                                        finalHistoryMsgs.push({
-                                            role: (dNode.role || 'System').toLowerCase(),
-                                            content: resolvedDContent
-                                        });
+                                        finalHistoryMsgs.push({ role: (dNode.role || 'System').toLowerCase(), content: resolvedDContent });
                                     }
                                 }
                             }
