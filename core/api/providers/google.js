@@ -10,8 +10,7 @@ module.exports = {
 
         const headers = {
             'Content-Type': 'application/json',
-            'x-goog-api-key': key,
-            'Authorization': `Bearer ${key}`
+            'x-goog-api-key': key
         };
 
         return { baseUrl, headers };
