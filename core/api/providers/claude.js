@@ -69,19 +69,54 @@ module.exports = {
             'x-api-key': key || ''
         };
 
+        let processedMessages = [...messages];
+
+        // 1. ИЗВЛЕКАЕМ СИСТЕМНЫЙ ПРОМПТ
         let systemPrompt = "";
+        const systemMsgs = processedMessages.filter(m => m.role === 'system');
+        let chatMsgs = processedMessages.filter(m => m.role !== 'system');
+
+        systemPrompt = systemMsgs.map(m => {
+            return Array.isArray(m.content) ? m.content.map(c => c.text || '').join('\n') : m.content;
+        }).join('\n\n');
+
+        // 2. НАТИВНЫЙ СИСТЕМНЫЙ ПРОМПТ (Вкл/Выкл)
+        if (samplers.native_system_prompt === false && systemPrompt.trim()) {
+            const sysText = "[SYSTEM INSTRUCTIONS]\n" + systemPrompt.trim() + "\n\n";
+            const firstUserIdx = chatMsgs.findIndex(m => m.role === 'user');
+
+            if (firstUserIdx !== -1) {
+                chatMsgs[firstUserIdx].content = sysText + chatMsgs[firstUserIdx].content;
+            } else {
+                chatMsgs.unshift({ role: 'user', content: sysText.trim() });
+            }
+            systemPrompt = ""; // Очищаем нативный, так как склеили его с User
+        }
+
+        // 3. СЛИЯНИЕ В ОДИН ШАГ (Flatten)
+        if (samplers.single_turn_mode === true) {
+            let combinedText = "";
+            let allImages = [];
+
+            chatMsgs.forEach(m => {
+                const safeRole = (m.role || 'user').toUpperCase();
+                combinedText += `\n\n--- ${safeRole} ---\n${m.content}`;
+
+                if (m.images && m.images.length > 0) {
+                    allImages = allImages.concat(m.images);
+                }
+            });
+
+            const flattenedUserMsg = { role: 'user', content: combinedText.trim() };
+            if (allImages.length > 0) flattenedUserMsg.images = allImages;
+
+            chatMsgs = [flattenedUserMsg];
+        }
+
+        // 4. СБОРКА И ФИЛЬТРАЦИЯ КАРТИНОК ДЛЯ КЛОДА
         const claudeMessages = [];
 
-        for (const msg of messages) {
-            // Клод принимает системный промпт отдельно на верхнем уровне JSON, а не в массиве
-            if (msg.role === 'system') {
-                const text = Array.isArray(msg.content)
-                    ? msg.content.map(c => c.text || '').join('\n')
-                    : msg.content;
-                systemPrompt += (systemPrompt ? "\n\n" : "") + text;
-                continue;
-            }
-
+        for (const msg of chatMsgs) {
             const contentArray = [];
 
             // Если контент уже массив (из чужого парсера), перебираем его
@@ -89,7 +124,7 @@ module.exports = {
                 for (const part of msg.content) {
                     if (part.type === 'text' && part.text) {
                         contentArray.push({ type: 'text', text: part.text });
-                    } else if (part.type === 'image_url') {
+                    } else if (part.type === 'image_url' && samplers.send_attachments !== false) {
                         const url = typeof part.image_url === 'string' ? part.image_url : part.image_url?.url;
                         const match = url?.match(/^data:(.*?);base64,(.*)$/);
                         if (match) {
@@ -101,8 +136,8 @@ module.exports = {
                     }
                 }
             } else {
-                // Если контент строка (стандарт), мапим картинки
-                if (Array.isArray(msg.images)) {
+                // Если контент строка, проверяем массив images
+                if (Array.isArray(msg.images) && samplers.send_attachments !== false) {
                     msg.images.forEach(imgUrl => {
                         const match = imgUrl.match(/^data:(.*?);base64,(.*)$/);
                         if (match) {

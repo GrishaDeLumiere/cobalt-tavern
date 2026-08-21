@@ -146,7 +146,13 @@ module.exports = async function (fastify, opts) {
                 messages: messages,
                 samplers: {
                     ...samplerSettings,
-                    reasoning_effort: activePreset?.reasoning_effort || 'auto'
+                    reasoning_effort: activePreset?.reasoning_effort || 'auto',
+                    send_attachments: activePreset?.send_attachments !== false,
+                    google_advanced_safety: activePreset?.google_advanced_safety === true,
+                    google_send_safety: activePreset?.google_send_safety !== false, // <--- ВОТ ЭТА СТРОКА
+                    single_turn_mode: activePreset?.single_turn_mode === true,
+                    native_system_prompt: activePreset?.native_system_prompt !== false,
+                    google_interactions_api: activePreset?.google_interactions_api === true
                 },
                 replyRaw: reply.raw,
                 prefillTag: usePrefill ? openTag : null,

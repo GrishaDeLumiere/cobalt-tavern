@@ -86,13 +86,57 @@ module.exports = {
             });
         }
 
-        const visionMessages = messages.map(msg => {
-            if (msg.images && msg.images.length > 0) {
+        let processedMessages = [...messages];
+
+        // 1. НАТИВНЫЙ СИСТЕМНЫЙ ПРОМПТ (Если выключен - клеим к первому сообщению User)
+        if (samplers.native_system_prompt === false) {
+            const systemMsgs = processedMessages.filter(m => m.role === 'system');
+            const chatMsgs = processedMessages.filter(m => m.role !== 'system');
+
+            if (systemMsgs.length > 0) {
+                const sysText = "[SYSTEM INSTRUCTIONS]\n" + systemMsgs.map(m => m.content).join('\n\n') + "\n\n";
+                const firstUserIdx = chatMsgs.findIndex(m => m.role === 'user');
+
+                if (firstUserIdx !== -1) {
+                    chatMsgs[firstUserIdx].content = sysText + chatMsgs[firstUserIdx].content;
+                } else {
+                    // Если сообщений от юзера вдруг нет, создаем
+                    chatMsgs.unshift({ role: 'user', content: sysText.trim() });
+                }
+            }
+            processedMessages = chatMsgs;
+        }
+
+        // 2. СЛИЯНИЕ В ОДИН ШАГ (Если включен Flatten)
+        if (samplers.single_turn_mode === true) {
+            const systemMsgs = processedMessages.filter(m => m.role === 'system');
+            const chatMsgs = processedMessages.filter(m => m.role !== 'system');
+
+            let combinedText = "";
+            let allImages = [];
+
+            chatMsgs.forEach(m => {
+                const safeRole = (m.role || 'user').toUpperCase();
+                combinedText += `\n\n--- ${safeRole} ---\n${m.content}`;
+                if (m.images && m.images.length > 0) {
+                    allImages = allImages.concat(m.images);
+                }
+            });
+
+            const flattenedUserMsg = { role: 'user', content: combinedText.trim() };
+            if (allImages.length > 0) flattenedUserMsg.images = allImages;
+
+            processedMessages = [...systemMsgs, flattenedUserMsg];
+        }
+
+        // 3. ОБРАБОТКА КАРТИНОК (VISION) С УЧЕТОМ ГАЛОЧКИ
+        const finalMessages = processedMessages.map(msg => {
+            if (msg.images && msg.images.length > 0 && samplers.send_attachments !== false) {
                 const contentParts = [{ type: 'text', text: msg.content }];
                 msg.images.forEach(imgBase64 => {
                     contentParts.push({
                         type: 'image_url',
-                        image_url: { url: imgBase64 }
+                        image_url: { url: imgBase64 } // OpenAI / OpenRouter формат
                     });
                 });
                 return { role: msg.role, content: contentParts };
@@ -102,7 +146,7 @@ module.exports = {
 
         const payload = {
             model: model,
-            messages: visionMessages,
+            messages: finalMessages,
             stream: isStreaming,
             max_tokens: samplers.max_tokens,
             temperature: samplers.temperature,

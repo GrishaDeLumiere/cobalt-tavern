@@ -1,5 +1,3 @@
-// ФАЙЛ: server/api/providers/google.js
-
 module.exports = {
     _normalize(url, key) {
         let baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
@@ -38,143 +36,314 @@ module.exports = {
 
     async test(url, key, model) {
         const { baseUrl, headers } = this._normalize(url, key);
-
         const modelPath = model.includes('/') ? model : `models/${model}`;
-        const endpoint = `${baseUrl}/${modelPath}:generateContent`;
 
-        const payload = {
-            contents: [{ role: 'user', parts: [{ text: 'Say exactly: "System Online." and nothing else.' }] }],
-            generationConfig: { maxOutputTokens: 15 }
-        };
+        const isInteractionsAPI = model.includes('deep-research') ||
+            model.includes('antigravity') ||
+            model.includes('omni') ||
+            model.match(/gemini-3\.[5-9]/) ||
+            model.match(/gemma-4/);
+
+        const endpoint = isInteractionsAPI
+            ? `${baseUrl}/interactions`
+            : `${baseUrl}/${modelPath}:generateContent`;
+
+        const payload = {};
+
+        if (isInteractionsAPI) {
+            payload.model = modelPath.replace('models/', '');
+            payload.generation_config = { max_output_tokens: 15 };
+            payload.input = [{
+                type: 'user_input',
+                content: [{ type: 'text', text: 'Say exactly: "System Online." and nothing else.' }]
+            }];
+        } else {
+            payload.generationConfig = { maxOutputTokens: 15 };
+            payload.contents = [{
+                role: 'user',
+                parts: [{ text: 'Say exactly: "System Online." and nothing else.' }]
+            }];
+        }
 
         const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(payload) });
         if (!res.ok) throw new Error(await res.text());
 
         const data = await res.json();
+
+        if (isInteractionsAPI) {
+            const outStep = data.steps?.find(s => s.type === 'model_output');
+            return outStep?.content?.map(c => c.text || '').join('') || data.output_text || 'ПУСТОЙ ОТВЕТ (INTERACTIONS)';
+        }
+
         return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'ПУСТОЙ ОТВЕТ';
     },
 
     async generateStream({ url, key, model, messages, samplers, replyRaw, prefillTag, signal, onLog }) {
         const { baseUrl, headers } = this._normalize(url, key);
         const isStreaming = samplers.stream !== false;
-
         const modelPath = model.includes('/') ? model : `models/${model}`;
-        const endpoint = isStreaming
-            ? `${baseUrl}/${modelPath}:streamGenerateContent?alt=sse`
-            : `${baseUrl}/${modelPath}:generateContent`;
+
+        const isInteractionsAPI = samplers.google_interactions_api === true ||
+            model.includes('deep-research') ||
+            model.includes('antigravity') ||
+            model.includes('omni') ||
+            model.match(/gemini-3\.[5-9]/) ||
+            model.match(/gemma-4/);
+
+        // АВТО-ДЕТЕКТ АГЕНТОВ: Форсируем Flatten, чтобы избежать ошибки 400 Multiturn
+        const isAgentModel = model.includes('antigravity') || model.includes('deep-research');
+        if (isAgentModel) {
+            samplers.single_turn_mode = true;
+        }
+
+        let endpoint;
+        if (isInteractionsAPI) {
+            endpoint = `${baseUrl}/interactions`;
+        } else {
+            endpoint = isStreaming
+                ? `${baseUrl}/${modelPath}:streamGenerateContent?alt=sse`
+                : `${baseUrl}/${modelPath}:generateContent`;
+        }
 
         const systemLines = messages
             .filter(m => (m.role || '').toLowerCase() === 'system')
             .map(m => m.content)
             .join('\n\n');
 
-        const geminiContents = [];
         const chatMsgs = messages.filter(m => (m.role || '').toLowerCase() !== 'system');
+        const geminiContents = [];
 
-        chatMsgs.forEach(m => {
-            const safeRole = (m.role || '').toLowerCase();
-            const mappedRole = safeRole === 'assistant' ? 'model' : 'user';
+        const buildImagePart = (imgDataUrl) => {
+            const match = imgDataUrl.match(/^data:(.*?);base64,(.*)$/);
+            if (!match) return null;
+            return isInteractionsAPI
+                ? { type: 'image', mime_type: match[1], data: match[2] }
+                : { inlineData: { mimeType: match[1], data: match[2] } };
+        };
 
-            const newParts = [{ text: m.content }];
-            if (m.images && m.images.length > 0) {
-                m.images.forEach(imgDataUrl => {
-                    const match = imgDataUrl.match(/^data:(.*?);base64,(.*)$/);
-                    if (match) {
-                        newParts.push({
-                            inlineData: {
-                                mimeType: match[1],
-                                data: match[2]
-                            }
-                        });
+        const buildTextPart = (textStr) => {
+            return isInteractionsAPI
+                ? { type: 'text', text: textStr }
+                : { text: textStr };
+        };
+
+        // 1. СБОРКА ИСТОРИИ (СЛИЯНИЕ ИЛИ МУЛЬТИТУРН)
+        if (samplers.single_turn_mode) {
+            const combinedParts = [];
+            let combinedText = "";
+
+            chatMsgs.forEach((m) => {
+                const safeRole = (m.role || '').toUpperCase();
+                combinedText += `\n\n--- ${safeRole} ---\n${m.content}`;
+
+                if (m.images && m.images.length > 0) {
+                    m.images.forEach(imgUrl => {
+                        const imgPart = buildImagePart(imgUrl);
+                        if (imgPart) combinedParts.push(imgPart);
+                    });
+                }
+            });
+
+            combinedParts.unshift(buildTextPart(combinedText.trim()));
+
+            geminiContents.push(isInteractionsAPI
+                ? { type: 'user_input', content: combinedParts }
+                : { role: 'user', parts: combinedParts }
+            );
+        } else {
+            chatMsgs.forEach(m => {
+                const safeRole = (m.role || '').toLowerCase();
+
+                const mappedRole = isInteractionsAPI
+                    ? (safeRole === 'assistant' ? 'model_output' : 'user_input')
+                    : (safeRole === 'assistant' ? 'model' : 'user');
+
+                const newParts = [buildTextPart(m.content)];
+                if (m.images && m.images.length > 0) {
+                    m.images.forEach(imgUrl => {
+                        const imgPart = buildImagePart(imgUrl);
+                        if (imgPart) newParts.push(imgPart);
+                    });
+                }
+
+                const prevMsg = geminiContents.length > 0 ? geminiContents[geminiContents.length - 1] : null;
+                const prevRole = prevMsg ? (isInteractionsAPI ? prevMsg.type : prevMsg.role) : null;
+
+                if (prevRole === mappedRole) {
+                    const targetParts = isInteractionsAPI ? prevMsg.content : prevMsg.parts;
+
+                    if (targetParts[0].text !== undefined) {
+                        targetParts[0].text += '\n\n' + m.content;
+                    } else {
+                        targetParts.push(buildTextPart('\n\n' + m.content));
                     }
-                });
-            }
-
-            if (geminiContents.length > 0 && geminiContents[geminiContents.length - 1].role === mappedRole) {
-                const targetMsg = geminiContents[geminiContents.length - 1];
-                if (targetMsg.parts[0].text !== undefined) {
-                    targetMsg.parts[0].text += '\n\n' + m.content;
+                    if (newParts.length > 1) {
+                        targetParts.push(...newParts.slice(1));
+                    }
                 } else {
-                    targetMsg.parts.push({ text: '\n\n' + m.content });
+                    geminiContents.push(isInteractionsAPI
+                        ? { type: mappedRole, content: newParts }
+                        : { role: mappedRole, parts: newParts }
+                    );
                 }
+            });
+        }
 
-                if (newParts.length > 1) {
-                    targetMsg.parts.push(...newParts.slice(1));
-                }
-            } else {
-                geminiContents.push({
-                    role: mappedRole,
-                    parts: newParts
-                });
-            }
-        });
-
+        // 2. БЕЗОПАСНЫЙ PREFILL (ЗАЩИТА ОТ КРАША АГЕНТОВ)
         if (prefillTag) {
-            if (geminiContents.length > 0 && geminiContents[geminiContents.length - 1].role === 'model') {
-                geminiContents[geminiContents.length - 1].parts[0].text += `\n\n${prefillTag}\n`;
+            if (samplers.single_turn_mode) {
+                const lastMsg = geminiContents[geminiContents.length - 1];
+                const targetParts = isInteractionsAPI ? lastMsg.content : lastMsg.parts;
+                const hintText = `\n\n${prefillTag}\n`;
+
+                if (targetParts[0].text !== undefined) {
+                    targetParts[0].text += hintText;
+                } else {
+                    targetParts.push(buildTextPart(hintText));
+                }
             } else {
-                geminiContents.push({
-                    role: 'model',
-                    parts: [{ text: `${prefillTag}\n` }]
-                });
+                // Обычный Multiturn Prefill
+                const prevMsg = geminiContents.length > 0 ? geminiContents[geminiContents.length - 1] : null;
+                const isModelMsg = prevMsg ? (isInteractionsAPI ? prevMsg.type === 'model_output' : prevMsg.role === 'model') : false;
+
+                if (isModelMsg) {
+                    const targetParts = isInteractionsAPI ? prevMsg.content : prevMsg.parts;
+                    targetParts[0].text += `\n\n${prefillTag}\n`;
+                } else {
+                    geminiContents.push(isInteractionsAPI
+                        ? { type: 'model_output', content: [buildTextPart(`${prefillTag}\n`)] }
+                        : { role: 'model', parts: [{ text: `${prefillTag}\n` }] }
+                    );
+                }
             }
         }
 
-        const payload = {
-            contents: geminiContents,
-            generationConfig: {
-                maxOutputTokens: samplers.max_tokens,
-                temperature: samplers.temperature,
-                topP: samplers.top_p
-            },
-            safetySettings: [
-                { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
-                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
-                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
-                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
+        // 3. НАТИВНАЯ СИСТЕМА (ЕСЛИ ВЫКЛЮЧЕНА, ПРЯЧЕМ В ЮЗЕРА)
+        if (systemLines.trim() && !samplers.native_system_prompt) {
+            const sysText = `[SYSTEM INSTRUCTIONS]\n${systemLines.trim()}\n\n`;
+            const firstUserIndex = geminiContents.findIndex(m => isInteractionsAPI ? m.type === 'user_input' : m.role === 'user');
+
+            if (firstUserIndex !== -1) {
+                const targetParts = isInteractionsAPI ? geminiContents[firstUserIndex].content : geminiContents[firstUserIndex].parts;
+                if (targetParts[0].text !== undefined) {
+                    targetParts[0].text = sysText + targetParts[0].text;
+                } else {
+                    targetParts.unshift(buildTextPart(sysText));
+                }
+            } else {
+                geminiContents.unshift(isInteractionsAPI
+                    ? { type: 'user_input', content: [buildTextPart(sysText.trim())] }
+                    : { role: 'user', parts: [{ text: sysText.trim() }] }
+                );
+            }
+        }
+
+        const safetySettingsArr = [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" }
+        ];
+
+        if (samplers.google_advanced_safety) {
+            safetySettingsArr.push(
                 { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "OFF" },
-                { category: "HARM_CATEGORY_JAILBREAK", threshold: "OFF" },
+                { category: "HARM_CATEGORY_JAILBREAK", threshold: "OFF" }
+            );
+        }
+        if (samplers.send_attachments) {
+            safetySettingsArr.push(
                 { category: "HARM_CATEGORY_IMAGE_HATE", threshold: "OFF" },
                 { category: "HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT", threshold: "OFF" },
                 { category: "HARM_CATEGORY_IMAGE_HARASSMENT", threshold: "OFF" },
                 { category: "HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT", threshold: "OFF" }
-            ]
-        };
-
-        if (systemLines.trim()) {
-            payload.systemInstruction = {
-                parts: [{ text: systemLines.trim() }]
-            };
+            );
         }
 
-        if (samplers.reasoning_effort && samplers.reasoning_effort !== 'auto') {
-            let effort = samplers.reasoning_effort;
-            const isGemini3 = model.includes('gemini-3');
+        const payload = {};
 
-            if (isGemini3) {
-                if (effort === 'min') effort = 'minimal';
-                if (effort === 'max') effort = 'high';
+        // ==========================================
+        // СБОРКА PAYLOAD 
+        // ==========================================
+        if (isInteractionsAPI) {
+            payload.model = modelPath.replace('models/', '');
+            if (isStreaming) payload.stream = true;
 
-                payload.generationConfig.thinkingConfig = {
-                    thinkingLevel: effort.toUpperCase()
-                };
-            } else {
-                let budget = -1;
-                if (effort === 'min' || effort === 'low') budget = 1024;
-                else if (effort === 'medium') budget = 8192;
-                else if (effort === 'high' || effort === 'max') budget = 24576;
+            payload.store = false;
+            payload.input = geminiContents;
 
-                if (budget !== -1) {
-                    payload.generationConfig.thinkingConfig = {
-                        thinkingBudget: budget
-                    };
+            payload.generation_config = {
+                temperature: samplers.temperature,
+                max_output_tokens: samplers.max_tokens,
+                top_p: samplers.top_p
+            };
+
+            if (samplers.google_send_safety) {
+                payload.safety_settings = safetySettingsArr;
+            }
+
+            if (systemLines.trim() && samplers.native_system_prompt) {
+                payload.system_instruction = { parts: [{ text: systemLines.trim() }] };
+            }
+
+            // Для агентов типа Deep Research и Antigravity мы НЕ ШЛЕМ thinking...
+            if (samplers.reasoning_effort && samplers.reasoning_effort !== 'auto' && !isAgentModel) {
+                let effort = samplers.reasoning_effort;
+                const isGemini3 = model.includes('gemini-3');
+
+                if (isGemini3) {
+                    if (effort === 'min') effort = 'minimal';
+                    if (effort === 'max') effort = 'high';
+                    payload.generation_config.thinking_level = effort.toLowerCase();
+
+                } else {
+                    let budget = -1;
+                    if (effort === 'min' || effort === 'low') budget = 1024;
+                    else if (effort === 'medium') budget = 8192;
+                    else if (effort === 'high' || effort === 'max') budget = 24576;
+
+                    if (budget !== -1) {
+                        payload.generation_config.thinking_budget = budget;
+                    }
+                }
+            }
+        } else {
+            payload.contents = geminiContents;
+            payload.generationConfig = {
+                temperature: samplers.temperature,
+                maxOutputTokens: samplers.max_tokens,
+                topP: samplers.top_p
+            };
+
+            if (samplers.google_send_safety) {
+                payload.safetySettings = safetySettingsArr;
+            }
+
+            if (systemLines.trim() && samplers.native_system_prompt) {
+                payload.systemInstruction = { parts: [{ text: systemLines.trim() }] };
+            }
+
+            if (samplers.reasoning_effort && samplers.reasoning_effort !== 'auto') {
+                let effort = samplers.reasoning_effort;
+                const isGemini3 = model.includes('gemini-3');
+
+                if (isGemini3) {
+                    if (effort === 'min') effort = 'minimal';
+                    if (effort === 'max') effort = 'high';
+                    payload.generationConfig.thinkingConfig = { thinkingLevel: effort.toUpperCase() };
+                } else {
+                    let budget = -1;
+                    if (effort === 'min' || effort === 'low') budget = 1024;
+                    else if (effort === 'medium') budget = 8192;
+                    else if (effort === 'high' || effort === 'max') budget = 24576;
+
+                    if (budget !== -1) {
+                        payload.generationConfig.thinkingConfig = { thinkingBudget: budget };
+                    }
                 }
             }
         }
 
-        // ==========================================
-        // ДАТЧИКИ ДЛЯ КОНСОЛИ ШЛЮЗА
-        // ==========================================
         let response;
         let fullGeneratedText = "";
         let errorStatus = null;
@@ -203,18 +372,13 @@ module.exports = {
             return;
         }
 
-        // ==========================================
-        //  ПАРСИНГ HTTP ОШИБОК (ДО СТРИМА)
-        // ==========================================
         if (!response.ok) {
             const errText = await response.text();
             let errMsg = errText.slice(0, 500);
             try {
                 const errJson = JSON.parse(errText);
-                if (errJson.error && errJson.error.message) {
-                    errMsg = errJson.error.message;
-                }
-            } catch (e) { /* сырой текст */ }
+                if (errJson.error && errJson.error.message) errMsg = errJson.error.message;
+            } catch (e) { }
 
             console.error(`[GEMINI HTTP ERROR] ${response.status}: ${errMsg}`);
 
@@ -233,14 +397,18 @@ module.exports = {
             return;
         }
 
-        // ==========================================
-        // ВЕТКА БЕЗ СТРИМИНГА
-        // ==========================================
         if (!isStreaming) {
             try {
                 const data = await response.json();
                 rawResponseData = data;
-                fullGeneratedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+                if (isInteractionsAPI) {
+                    const outStep = data.steps?.find(s => s.type === 'model_output');
+                    fullGeneratedText = outStep?.content?.map(c => c.text || '').join('') || data.output_text || '';
+                } else {
+                    fullGeneratedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                }
+
                 if (!replyRaw.writableEnded) {
                     replyRaw.write(`data: ${JSON.stringify({ chunk: fullGeneratedText })}\n\n`);
                 }
@@ -252,7 +420,6 @@ module.exports = {
                 }
             } finally {
                 if (onLog) onLog(payload, rawResponseData, errorStatus);
-
                 if (!replyRaw.writableEnded) {
                     replyRaw.write(`data: [DONE]\n\n`);
                     replyRaw.end();
@@ -261,12 +428,14 @@ module.exports = {
             return;
         }
 
-        // ==========================================
-        // ПАРСИНГ СТРИМА (ЛОВИТ ЦЕНЗУРУ И ОБРЫВЫ БЕЗ ДЫР)
-        // ==========================================
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
+
+        // Флаг и теги для перехвата нативных размышлений агента
+        let inThoughtStep = false;
+        const openTag = prefillTag || '<think>';
+        const closeTag = openTag.replace('<', '</');
 
         const processChunk = (line) => {
             const trimmed = line.trim();
@@ -280,6 +449,60 @@ module.exports = {
                     throw new Error(data.error.message || JSON.stringify(data.error));
                 }
 
+                // ==========================================
+                // INTERACTIONS API PARSER (С ПЕРЕХВАТОМ МЫСЛЕЙ)
+                // ==========================================
+                if (data.event_type) {
+                    // НАЧАЛО МЫСЛЕЙ (АГЕНТ)
+                    if (data.event_type === 'step.start' && data.step?.type === 'thought') {
+                        inThoughtStep = true;
+                        let chunk = openTag + '\n';
+                        fullGeneratedText += chunk;
+                        if (!replyRaw.writableEnded) {
+                            replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                        }
+                    }
+                    // КОНЕЦ МЫСЛЕЙ (АГЕНТ)
+                    else if (data.event_type === 'step.stop' && inThoughtStep) {
+                        inThoughtStep = false;
+                        let chunk = '\n' + closeTag + '\n\n';
+                        fullGeneratedText += chunk;
+                        if (!replyRaw.writableEnded) {
+                            replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                        }
+                    }
+                    // ПОТОК ДАННЫХ
+                    else if (data.event_type === 'step.delta') {
+                        let chunk = "";
+
+                        if (data.delta?.type === 'text' && data.delta.text) {
+                            chunk = data.delta.text;
+                        }
+                        else if (data.delta?.type === 'thought_summary' && data.delta.content?.text) {
+                            chunk = data.delta.content.text;
+                        }
+
+                        if (chunk) {
+                            fullGeneratedText += chunk;
+                            if (!replyRaw.writableEnded) {
+                                replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                            }
+                        }
+                    }
+                    // ОШИБКА
+                    else if (data.event_type === 'error') {
+                        const reasonAlert = data.error?.message || `Сбой генерации (Interactions API)`;
+                        errorStatus = `200 STOPPED (ERROR)`;
+                        if (!replyRaw.writableEnded) {
+                            replyRaw.write(`data: ${JSON.stringify({ error: reasonAlert })}\n\n`);
+                        }
+                    }
+                    return;
+                }
+
+                // ==========================================
+                // ЛЕГАСИ PARSER
+                // ==========================================
                 const candidate = data.candidates?.[0];
                 if (!candidate) return;
 
@@ -305,7 +528,7 @@ module.exports = {
 
                 const chunk = candidate.content?.parts?.[0]?.text;
                 if (chunk) {
-                    fullGeneratedText += chunk; // Накапливаем текст
+                    fullGeneratedText += chunk;
                     if (!replyRaw.writableEnded) {
                         replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
                     }
@@ -352,7 +575,10 @@ module.exports = {
             }
         } finally {
             if (!rawResponseData) {
-                rawResponseData = { candidates: [{ content: { parts: [{ text: fullGeneratedText }] } }] };
+                rawResponseData = {
+                    _format: isInteractionsAPI ? 'interactions' : 'generateContent',
+                    text: fullGeneratedText
+                };
             }
             if (onLog) onLog(payload, rawResponseData, errorStatus);
 
