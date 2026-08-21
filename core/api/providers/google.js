@@ -1,3 +1,5 @@
+// ФАЙЛ: server/api/providers/google.js
+
 module.exports = {
     _normalize(url, key) {
         let baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
@@ -41,7 +43,6 @@ module.exports = {
         const isInteractionsAPI = model.includes('deep-research') ||
             model.includes('antigravity') ||
             model.includes('omni') ||
-            model.match(/gemini-3\.[5-9]/) ||
             model.match(/gemma-4/);
 
         const endpoint = isInteractionsAPI
@@ -87,7 +88,6 @@ module.exports = {
             model.includes('deep-research') ||
             model.includes('antigravity') ||
             model.includes('omni') ||
-            model.match(/gemini-3\.[5-9]/) ||
             model.match(/gemma-4/);
 
         // АВТО-ДЕТЕКТ АГЕНТОВ: Форсируем Flatten, чтобы избежать ошибки 400 Multiturn

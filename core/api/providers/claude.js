@@ -1,3 +1,5 @@
+// ФАЙЛ: server/api/providers/claude.js
+
 module.exports = {
     async ping(url, key) {
         const baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
