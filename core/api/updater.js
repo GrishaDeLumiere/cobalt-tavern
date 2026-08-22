@@ -4,6 +4,7 @@ const path = require('path');
 const axios = require('axios');
 const AdmZip = require('adm-zip');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 const CURRENT_VERSION = require(path.join(__dirname, '../package.json')).version;
 const REPO_ZIP_URL = 'https://github.com/GrishaDeLumiere/cobalt-tavern/archive/refs/heads/main.zip';
@@ -62,6 +63,21 @@ async function syncDirectories(source, target) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// === ФУНКЦИЯ АВТОМАТИЧЕСКОГО РЕСТАРТА СЕРВЕРА ===
+function respawnSelf() {
+    console.log('\n[UPDATER] Развертывание нового инстанса Ядра...');
+
+    // Запускаем новый процесс Node с теми же аргументами
+    const child = spawn(process.argv[0], process.argv.slice(1), {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: 'inherit'
+    });
+
+    child.unref(); // Отвязываем новый процесс от текущего
+    process.exit(0); // Завершаем старый процесс (освобождает порт 8000)
+}
+
 async function runUpdateStream(res) {
     if (process.env.NODE_ENV === 'development') {
         res.write(`data: ${JSON.stringify({ error: "КРИТИЧЕСКАЯ ЗАЩИТА: ОБНОВЛЕНИЕ ЗАПРЕЩЕНО В РЕЖИМЕ DEV СОХРАНЕНИЯ GIT" })}\n\n`);
@@ -72,49 +88,50 @@ async function runUpdateStream(res) {
     const sendLog = (msg, type = 'info') => res.write(`data: ${JSON.stringify({ msg, type })}\n\n`);
 
     try {
-        await sleep(600);
-        sendLog('Установка соединения с серверами репозитория GitHub...', 'info');
+        await sleep(400);
+        sendLog('Установка защищенного соединения с GitHub...', 'info');
 
-        await sleep(800);
-        sendLog('Запрос архива ветки релизов отправлен.', 'success');
+        await sleep(600);
+        sendLog('Запрос релиз-пакета ядра...', 'success');
 
         const response = await axios({ url: REPO_ZIP_URL, method: 'GET', responseType: 'arraybuffer' });
         const mb = (response.data.byteLength / 1024 / 1024).toFixed(2);
 
         await sleep(400);
-        sendLog(`Новое ядро загружено в память (${mb} MB).`, 'success');
+        sendLog(`Пакет получен в буфер (${mb} MB).`, 'success');
 
         if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
         const zipPath = path.join(TEMP_DIR, 'update.zip');
         fs.writeFileSync(zipPath, response.data);
 
-        await sleep(800);
-        sendLog('Распаковка файлов в буферную директорию...', 'warn');
+        await sleep(600);
+        sendLog('Распаковка и проверка целостности архива...', 'warn');
         const zip = new AdmZip(zipPath);
         zip.extractAllTo(TEMP_DIR, true);
 
-        await sleep(600);
-        sendLog('Распаковка буфера завершена.', 'success');
+        await sleep(500);
+        sendLog('Синхронизация файловой системы ядра...', 'warn');
 
         const newFilesDir = path.join(TEMP_DIR, EXTRACTED_FOLDER_NAME);
         const targetRootDir = path.join(__dirname, '../../');
-
-        await sleep(800);
-        sendLog('Синхронизация файлов и мутация ядра...', 'warn');
         await syncDirectories(newFilesDir, targetRootDir);
 
-        await sleep(600);
-        sendLog('Очистка временных файлов...', 'info');
+        await sleep(400);
+        sendLog('Очистка буферных секторов...', 'info');
         fs.rmSync(TEMP_DIR, { recursive: true, force: true });
 
         await sleep(400);
-        sendLog('ОБНОВЛЕНИЕ СИСТЕМЫ ЗАВЕРШЕНО!', 'success');
-        sendLog('Процесс ядра будет принудительно остановлен через 3 сек. для применения изменений.', 'error');
+        sendLog('ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Инициализация перезапуска...', 'success');
 
+        // Отправляем сигнал клиенту
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
 
-        setTimeout(() => process.exit(0), 3000);
+        // Даем 1.5 секунды на закрытие сокетов и перезапускаем сервер
+        setTimeout(() => {
+            respawnSelf();
+        }, 1500);
+
     } catch (err) {
         res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
         res.end();
@@ -126,9 +143,9 @@ module.exports = async function (fastify, opts) {
         if (process.env.NODE_ENV === 'development') {
             return {
                 updateAvailable: false,
-                currentVersion: CURRENT_VERSION + ' [DEV РЕЖИМ]',
+                currentVersion: CURRENT_VERSION + ' [DEV]',
                 latestVersion: 'DEV',
-                error: 'АВАРИЙНАЯ ЗАЩИТА: РАБОТА С GIT-ВЕТКОЙ'
+                error: 'АВАРИЙНАЯ ЗАЩИТА: РАБОТА С GIT'
             };
         }
 

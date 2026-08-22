@@ -47,7 +47,7 @@ const buildChatsIndex = async () => {
         if (Array.isArray(aiData?.presets)) {
             aiData.presets.forEach(p => {
                 if (p.reasoning_open_tag && p.reasoning_open_tag !== '<think>') {
-                    const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\@@@CODEBLOCK1@@@amp;');
+                    const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                     const O = escapeRegExp(p.reasoning_open_tag);
                     const C = p.reasoning_close_tag ? escapeRegExp(p.reasoning_close_tag) : O.replace('<', '</');
                     customTagsRegExps.push(new RegExp(`${O}[\\s\\S]*?(${C}|$)`, 'g'));
@@ -136,7 +136,7 @@ const buildChatsIndex = async () => {
                                     size: (stat.size / 1024).toFixed(1) + 'KB',
                                     timestamp: chatTimestamp,
                                     bot_avatar: botAvatar,
-                                    chat_bg: meta.chat_bg || null // Индексируем фон для визуала
+                                    chat_bg: meta.chat_bg || null
                                 });
                             }
                         } catch (e) { }
@@ -216,8 +216,18 @@ module.exports = async function (fastify, opts) {
         await fs.mkdir(charDir, { recursive: true });
 
         const isBranch = !!payload.messages;
-        const fileName = `${charName} - ${isBranch ? 'ВЕТВЬ_' : ''}${getSTDateString()}.jsonl`;
+
+        let prefixName = charName;
+        if (isBranch && payload.base_chat_name) {
+            prefixName = payload.base_chat_name.replace(/[<>:"/\\|?*]/g, '_');
+        }
+
+        const fileName = `${prefixName} - ${isBranch ? 'ВЕТВЬ_' : ''}${getSTDateString()}.jsonl`;
         const filePath = path.join(charDir, fileName);
+
+        // Игнорируем старое имя чата при создании ветки
+        const incomingMeta = { ...(payload.chat_metadata || {}) };
+        if (isBranch) delete incomingMeta.custom_name;
 
         const metaLine = JSON.stringify({
             user_name: userName,
@@ -226,7 +236,8 @@ module.exports = async function (fastify, opts) {
             chat_metadata: {
                 custom_name: fileName.replace('.jsonl', ''),
                 isPinned: false,
-                character_id: payload.character_id
+                character_id: payload.character_id,
+                ...incomingMeta
             }
         });
 

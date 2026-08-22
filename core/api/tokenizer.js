@@ -5,11 +5,7 @@ const tiktoken = require('tiktoken');
 const { Tokenizer } = require('@agnai/web-tokenizers');
 const { SentencePieceProcessor } = require('@agnai/sentencepiece-js');
 
-const cache = {
-    spp: {},
-    web: {},
-    tik: {}
-};
+const cache = { spp: {}, web: {}, tik: {} };
 
 const guesstimate = (str) => Math.ceil(Buffer.byteLength(str, 'utf8') / 3.35);
 
@@ -50,15 +46,24 @@ module.exports = async function (fastify, opts) {
 
         try {
             let count = 0;
+            // БЕЗОПАСНЫЙ ЧАНКИНГ ДЛЯ WASM-ДВИЖКОВ (защита от Out Of Memory)
+            const chunkSize = 25000;
+
             if (type === 'spp') { // Llama, Mistral, Gemma...
                 const instance = await loadSPP(modelFile);
-                count = instance.encodeIds(text).length;
+                for (let i = 0; i < text.length; i += chunkSize) {
+                    count += instance.encodeIds(text.slice(i, i + chunkSize)).length;
+                }
             } else if (type === 'web') { // Claude, Llama3...
                 const instance = await loadWeb(modelFile);
-                count = instance.encode(text).length;
+                for (let i = 0; i < text.length; i += chunkSize) {
+                    count += instance.encode(text.slice(i, i + chunkSize)).length;
+                }
             } else { // Fallback, OpenAI GPT
-                const enc = loadTiktoken('gpt-3.5-turbo');
-                count = enc.encode(text).length;
+                const enc = loadTiktoken(modelFile || 'gpt-3.5-turbo');
+                for (let i = 0; i < text.length; i += chunkSize) {
+                    count += enc.encode(text.slice(i, i + chunkSize)).length;
+                }
             }
             return { count };
         } catch (err) {

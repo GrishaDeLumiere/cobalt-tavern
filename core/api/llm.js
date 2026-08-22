@@ -185,6 +185,195 @@ module.exports = async function (fastify, opts) {
         }
     });
 
+    // === API ДЛЯ РАБОТЫ С КОНФИГОМ ПЕРЕСКАЗА ===
+    fastify.get('/llm/summarize/config', async (request, reply) => {
+        const fs = require('fs/promises');
+        const path = require('path');
+        const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
+        const configPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'summarize_config.json');
+        try {
+            const data = await fs.readFile(configPath, 'utf-8');
+            return JSON.parse(data);
+        } catch (e) {
+            return reply.code(500).send({ error: 'Ошибка получения настроек' });
+        }
+    });
+
+    fastify.post('/llm/summarize/config', async (request, reply) => {
+        const fs = require('fs/promises');
+        const path = require('path');
+        const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
+        const configPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'summarize_config.json');
+        const configData = request.body;
+        try {
+            await fs.writeFile(configPath, JSON.stringify(configData, null, 4), 'utf-8');
+            return { success: true };
+        } catch (e) {
+            return reply.code(500).send({ error: 'Ошибка сохранения настроек' });
+        }
+    });
+
+    // === ИНФЕРЕНС ПЕРЕСКАЗА С ПОЛНОЙ ПЕРЕДАЧЕЙ СЭМПЛЕРОВ ===
+    fastify.post('/llm/summarize/generate', async (request, reply) => {
+        const { dialogueText, config, connectionId } = request.body;
+
+        const fs = require('fs/promises');
+        const path = require('path');
+        const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
+
+        let connection = null;
+        try {
+            const connRaw = await fs.readFile(path.join(ROOT_DATA_DIR, DEFAULT_USER, 'connections.json'), 'utf-8');
+            connection = JSON.parse(connRaw).find(c => c.id === connectionId);
+        } catch (e) { }
+
+        if (!connection) {
+            return reply.code(400).send({ error: 'Активное подключение не найдено' });
+        }
+
+        const maxTokens = Number(config?.max_tokens) || 1500;
+        const temperature = config?.temperature !== undefined ? Number(config.temperature) : 0.5;
+        const topP = config?.top_p !== undefined ? Number(config.top_p) : 0.95;
+        const template = config?.template || "{{dialogue}}";
+
+        const promptText = template.replace('{{dialogue}}', dialogueText);
+        const url = connection.url.endsWith('/') ? connection.url.slice(0, -1) : connection.url;
+        const key = connection.key || '';
+        const model = connection.model;
+        const apiType = connection.apiType || 'openai';
+
+        try {
+            let resultText = "";
+
+            if (apiType === 'google') {
+                let baseUrl = url;
+                if (!baseUrl.includes('googleapis.com') && !baseUrl.match(/\/v1(beta)?$/)) {
+                    baseUrl += '/v1beta';
+                }
+                const modelPath = model.includes('/') ? model : `models/${model}`;
+                const rawModelName = modelPath.replace('models/', '');
+
+                const isInteractionsModel = model.includes('deep-research') ||
+                    model.includes('antigravity') ||
+                    model.includes('omni') ||
+                    model.includes('thinking') ||
+                    model.match(/gemma-4/);
+
+                const callInteractions = async () => {
+                    const res = await fetch(`${baseUrl}/interactions`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                        body: JSON.stringify({
+                            model: rawModelName,
+                            store: false,
+                            input: [{
+                                type: 'user_input',
+                                content: [{ type: 'text', text: promptText }]
+                            }],
+                            generation_config: { max_output_tokens: maxTokens, temperature: temperature, top_p: topP }
+                        })
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    const data = await res.json();
+                    const outStep = data.steps?.find(s => s.type === 'model_output');
+                    return outStep?.content?.map(c => c.text || '').join('') || data.output_text || '';
+                };
+
+                const callGenerateContent = async () => {
+                    const res = await fetch(`${baseUrl}/${modelPath}:generateContent`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                        body: JSON.stringify({
+                            contents: [{ role: 'user', parts: [{ text: promptText }] }],
+                            generationConfig: { maxOutputTokens: maxTokens, temperature: temperature, topP: topP }
+                        })
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    const data = await res.json();
+                    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                };
+
+                try {
+                    if (isInteractionsModel) {
+                        resultText = await callInteractions();
+                    } else {
+                        resultText = await callGenerateContent();
+                    }
+                } catch (firstErr) {
+                    const errMsg = firstErr.message || '';
+                    if (errMsg.includes('Interactions API') || errMsg.includes('interactions')) {
+                        resultText = await callInteractions();
+                    } else if (errMsg.includes('generateContent') || errMsg.includes('not supported')) {
+                        resultText = await callGenerateContent();
+                    } else {
+                        throw new Error(`Google API Error: ${errMsg.slice(0, 300)}`);
+                    }
+                }
+
+            } else if (apiType === 'claude') {
+                const res = await fetch(`${url}/messages`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'anthropic-version': '2023-06-01',
+                        'x-api-key': key
+                    },
+                    body: JSON.stringify({
+                        model: model || 'claude-3-haiku-20240307',
+                        max_tokens: maxTokens,
+                        temperature: temperature,
+                        top_p: topP,
+                        messages: [{ role: 'user', content: promptText }]
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(`Claude API Error: ${errText.slice(0, 300)}`);
+                }
+                const data = await res.json();
+                resultText = data.content?.[0]?.text || '';
+
+            } else {
+                // OpenAI / OpenRouter / Groq / Custom
+                const headers = { 'Content-Type': 'application/json' };
+                if (key) headers['Authorization'] = `Bearer ${key}`;
+                if (apiType === 'openrouter') {
+                    headers['HTTP-Referer'] = 'http://localhost:8000';
+                    headers['X-Title'] = 'Cobalt Tavern';
+                }
+
+                const res = await fetch(`${url}/chat/completions`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [{ role: 'user', content: promptText }],
+                        max_tokens: maxTokens,
+                        temperature: temperature,
+                        top_p: topP
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(`API Error: ${errText.slice(0, 300)}`);
+                }
+                const data = await res.json();
+                resultText = data.choices?.[0]?.message?.content || '';
+            }
+
+            if (!resultText.trim()) {
+                throw new Error('ИИ вернул пустой ответ');
+            }
+
+            return { success: true, text: resultText.trim() };
+        } catch (error) {
+            fastify.log.error(`[SUMMARIZE LLM ERROR]: ${error.message}`);
+            return reply.code(500).send({ error: error.message || 'Сбой генерации пересказа' });
+        }
+    });
+
     fastify.get('/llm/logs', async (request, reply) => {
         return apiLogs;
     });

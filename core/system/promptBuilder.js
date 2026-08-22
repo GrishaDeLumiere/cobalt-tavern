@@ -220,23 +220,59 @@ const buildPrompt = async (payload) => {
 
                     const VISION_DEPTH_LIMIT = preset?.vision_depth !== undefined ? parseInt(preset.vision_depth, 10) : 5;
 
-                    // 1. Отбираем только валидные (видимые) сообщения чата
+                    // 1. Сворачиваем сгруппированные пересказы и отбираем валидные ноды
                     let validMessages = [];
+                    const processedGroupIds = new Set();
+
                     for (let index = 0; index < cleanMessages.length; index++) {
                         const m = cleanMessages[index];
                         if (m.is_system || m.isHidden) continue;
-                        validMessages.push({ originalIndex: index, message: m });
+
+                        // Если сообщение входит в группу пересказа
+                        if (m.summary_group?.id) {
+                            const groupId = m.summary_group.id;
+
+                            // Если эту группу мы еще не вставляли — ищем её итоговый текст и пушим ОДНУ ноду вместо всей пачки
+                            if (!processedGroupIds.has(groupId)) {
+                                processedGroupIds.add(groupId);
+
+                                // Находим текст пересказа (он хранится в последнем элементе группы)
+                                const groupLeader = cleanMessages.find(item => item.summary_group?.id === groupId && item.summary_group?.isLast);
+                                const summaryText = groupLeader?.summary_group?.text || m.summary_group?.text || '';
+
+                                if (summaryText.trim()) {
+                                    const summaryRole = groupLeader?.summary_group?.role || m.summary_group?.role || 'assistant';
+
+                                    validMessages.push({
+                                        originalIndex: index,
+                                        isSummaryNode: true,
+                                        message: {
+                                            is_user: summaryRole === 'user',
+                                            is_system: summaryRole === 'system',
+                                            role: summaryRole,
+                                            mes: summaryText.trim(),
+                                            name: summaryRole === 'user' ? userName : (summaryRole === 'assistant' ? charName : 'System')
+                                        }
+                                    });
+                                }
+                            }
+                            // Все остальные сообщения этой группы просто пропускаются
+                            continue;
+                        }
+
+                        validMessages.push({ originalIndex: index, isSummaryNode: false, message: m });
                     }
 
                     const totalValid = validMessages.length;
 
-                    // 2. Считаем смещение глубины (если ласт сообщение от AI, у юзера будет depth 0, у бота -1)
+                    // 2. Считаем смещение глубины (если последнее сообщение от AI, у юзера depth 0, у бота -1)
                     const lastMsgIsAi = totalValid > 0 && !validMessages[totalValid - 1].message.is_user;
                     const depthOffset = lastMsgIsAi ? 1 : 0;
 
                     // 3. Формируем историю чата с жестко привязанной глубиной (depth)
                     for (let i = 0; i < totalValid; i++) {
-                        const m = validMessages[i].message;
+                        const item = validMessages[i];
+                        const m = item.message;
                         const msgDepth = totalValid - 1 - i - depthOffset;
 
                         if (m.is_user && m.name) {
@@ -248,8 +284,9 @@ const buildPrompt = async (payload) => {
                         });
 
                         let attachmentsBase64 = [];
+                        // Вложения подтягиваем только для обычных сообщений (не для пересказов)
                         const isRecentNode = (totalValid - i) <= VISION_DEPTH_LIMIT;
-                        if (isRecentNode && preset?.send_attachments !== false && m.extra?.attachments) {
+                        if (!item.isSummaryNode && isRecentNode && preset?.send_attachments !== false && m.extra?.attachments) {
                             const attachDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters', character?.id || 'unknown', 'attachments');
                             for (const filename of m.extra.attachments) {
                                 try {
@@ -264,9 +301,9 @@ const buildPrompt = async (payload) => {
                         if (resolvedContent.trim() !== '' || attachmentsBase64.length > 0) {
                             historyMsgs.push({
                                 depth: msgDepth,
-                                role: m.is_user ? 'user' : 'assistant',
+                                role: item.isSummaryNode ? (m.role || 'assistant') : (m.is_user ? 'user' : 'assistant'),
                                 content: resolvedContent,
-                                name: m.is_user ? historicalUserName : charName,
+                                name: m.name || (m.is_user ? historicalUserName : charName),
                                 images: attachmentsBase64.length > 0 ? attachmentsBase64 : undefined
                             });
                         }

@@ -1,3 +1,4 @@
+// ФАЙЛ: server/api/connections.js
 const fs = require('fs/promises');
 const path = require('path');
 const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
@@ -19,23 +20,39 @@ const defaultConnections = [
 ];
 
 module.exports = async function (fastify, opts) {
-    const filePath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'connections.json');
-    const secretsPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'secrets.json'); // Путь к ключам
+    const userDir = path.join(ROOT_DATA_DIR, DEFAULT_USER);
+    const filePath = path.join(userDir, 'connections.json');
+    const secretsPath = path.join(userDir, 'secrets.json');
+
+    // Кэш для мгновенной отдачи при генерации
+    let connectionsCache = null;
+    let secretsCache = null;
+
+    const ensureStorage = async () => {
+        try { await fs.access(userDir); }
+        catch { await fs.mkdir(userDir, { recursive: true }); }
+    };
 
     // --- МАНИФЕСТ ПРОФИЛЕЙ ---
     fastify.get('/connections/manifest', async (request, reply) => {
+        if (connectionsCache) return connectionsCache;
+        await ensureStorage();
         try {
-            await fs.access(filePath);
             const data = await fs.readFile(filePath, 'utf-8');
-            return JSON.parse(data);
+            connectionsCache = JSON.parse(data);
+            return connectionsCache;
         } catch (err) {
+            connectionsCache = defaultConnections;
             return defaultConnections;
         }
     });
 
     fastify.post('/connections/manifest', async (request, reply) => {
+        await ensureStorage();
         try {
-            await fs.writeFile(filePath, JSON.stringify(request.body, null, 4), 'utf-8');
+            const newState = request.body || defaultConnections;
+            connectionsCache = newState;
+            await fs.writeFile(filePath, JSON.stringify(newState, null, 4), 'utf-8');
             return { status: 'Connections Synced', success: true };
         } catch (err) {
             fastify.log.error('Ошибка записи connections.json:', err);
@@ -45,18 +62,24 @@ module.exports = async function (fastify, opts) {
 
     // --- МЕНЕДЖЕР СЕКРЕТОВ (КЛЮЧЕЙ) ---
     fastify.get('/connections/secrets', async (request, reply) => {
+        if (secretsCache) return secretsCache;
+        await ensureStorage();
         try {
-            await fs.access(secretsPath);
             const data = await fs.readFile(secretsPath, 'utf-8');
-            return JSON.parse(data);
+            secretsCache = JSON.parse(data);
+            return secretsCache;
         } catch (err) {
-            return []; // Если файла нет, отдаем пустой массив
+            secretsCache = [];
+            return [];
         }
     });
 
     fastify.post('/connections/secrets', async (request, reply) => {
+        await ensureStorage();
         try {
-            await fs.writeFile(secretsPath, JSON.stringify(request.body, null, 4), 'utf-8');
+            const newSecrets = request.body || [];
+            secretsCache = newSecrets;
+            await fs.writeFile(secretsPath, JSON.stringify(newSecrets, null, 4), 'utf-8');
             return { status: 'Secrets Synced', success: true };
         } catch (err) {
             fastify.log.error('Ошибка записи secrets.json:', err);

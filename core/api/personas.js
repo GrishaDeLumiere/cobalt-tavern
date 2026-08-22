@@ -7,38 +7,38 @@ module.exports = async function (fastify, opts) {
     const avatarsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'avatars');
     const dbFile = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'personas_db.json');
 
+    // Кэш в ОЗУ для мгновенного ответа
+    let personasCache = null;
+
+    // Безопасное получение имени файла (защита от ../ Path Traversal)
+    const sanitizeFilename = (name) => {
+        if (!name) return '';
+        return path.basename(String(name).trim()).replace(/[<>:"/\\|?*]/g, '_');
+    };
+
     const ensureDB = async () => {
         try { await fs.access(avatarsDir); } catch { await fs.mkdir(avatarsDir, { recursive: true }); }
-        try { await fs.access(dbFile); } catch { await fs.writeFile(dbFile, JSON.stringify({ personas: [] }, null, 4)); }
+        try {
+            await fs.access(dbFile);
+        } catch {
+            await fs.writeFile(dbFile, JSON.stringify({ personas: [] }, null, 4), 'utf8');
+        }
     };
 
-    const readDB = async () => {
-        await ensureDB();
-        const data = await fs.readFile(dbFile, 'utf8');
-        return JSON.parse(data).personas || [];
-    };
-
-    const writeDB = async (personasArray) => {
-        await fs.writeFile(dbFile, JSON.stringify({ personas: personasArray }, null, 4));
-    };
-
-    // Главный эндпоинт загрузки + ДЕМОН ИСЦЕЛЕНИЯ
-    fastify.get('/personas', async (request, reply) => {
-        let personas = await readDB();
+    // Исцеление базы (запускается при первом старте или изменениях)
+    const healPersonas = async (personas) => {
         let dbChanged = false;
-
         let diskFiles = [];
         try { diskFiles = await fs.readdir(avatarsDir); } catch (e) { diskFiles = []; }
         const diskFilesSet = new Set(diskFiles);
 
         for (let i = 0; i < personas.length; i++) {
             let p = personas[i];
-
             if (!p.filename) continue;
 
             if (p.filename.includes('-.png') || p.filename === '.png') {
                 const saneName = (p.name || 'Unknown').replace(/[^a-zA-Z0-9а-яА-ЯёЁ]/g, '');
-                const cleanId = p.id.split('_').pop();
+                const cleanId = String(p.id).split('_').pop();
                 const newFilename = `avatar_${saneName}_${cleanId}.png`.replace(/\s+/g, '_');
 
                 if (diskFilesSet.has(p.filename)) {
@@ -65,63 +65,103 @@ module.exports = async function (fastify, opts) {
 
         if (dbChanged) {
             console.log('[HEALER] База Персон: Обнаружены и исправлены кривые импорты!');
-            await writeDB(personas);
+            await fs.writeFile(dbFile, JSON.stringify({ personas }, null, 4), 'utf8');
         }
 
-        const mapped = personas.map(p => ({
+        return personas;
+    };
+
+    const getPersonasData = async () => {
+        if (personasCache) return personasCache;
+
+        await ensureDB();
+        try {
+            const data = await fs.readFile(dbFile, 'utf8');
+            let parsed = JSON.parse(data).personas || [];
+            personasCache = await healPersonas(parsed);
+            return personasCache;
+        } catch (e) {
+            console.error('[PERSONAS DB] Сбой чтения базы:', e);
+            personasCache = [];
+            return [];
+        }
+    };
+
+    const savePersonasData = async (personasArray) => {
+        personasCache = personasArray;
+        await fs.writeFile(dbFile, JSON.stringify({ personas: personasArray }, null, 4), 'utf8');
+    };
+
+    // ==========================================
+    // ЭНДПОИНТЫ
+    // ==========================================
+
+    // Быстрая раздача из памяти (0 мс)
+    fastify.get('/personas', async (request, reply) => {
+        const personas = await getPersonasData();
+
+        return personas.map(p => ({
             ...p,
             avatarUrl: p.filename && p.filename.trim() !== ''
                 ? `/data/${DEFAULT_USER}/avatars/${encodeURIComponent(p.filename)}`
                 : ''
         }));
-
-        return mapped;
     });
 
     fastify.post('/personas/sync', async (request, reply) => {
         const personaData = request.body;
-        const personas = await readDB();
+        if (!personaData || !personaData.id) return { success: false };
 
+        const personas = await getPersonasData();
         const existingIdx = personas.findIndex(p => p.id === personaData.id);
+
         if (existingIdx > -1) {
             personas[existingIdx] = { ...personas[existingIdx], ...personaData };
         } else {
             personas.push(personaData);
         }
 
-        await writeDB(personas);
+        await savePersonasData(personas);
         return { success: true };
     });
 
     fastify.post('/personas/reorder', async (request, reply) => {
         const { order } = request.body;
         if (!order || !Array.isArray(order)) return { success: false };
-        const personas = await readDB();
+
+        const personas = await getPersonasData();
+
+        // Быстрая карта порядка O(1)
+        const orderMap = new Map(order.map((id, index) => [id, index]));
 
         personas.sort((a, b) => {
-            let posA = order.indexOf(a.id);
-            let posB = order.indexOf(b.id);
-            if (posA === -1) posA = 999;
-            if (posB === -1) posB = 999;
+            const posA = orderMap.has(a.id) ? orderMap.get(a.id) : 999;
+            const posB = orderMap.has(b.id) ? orderMap.get(b.id) : 999;
             return posA - posB;
         });
 
-        await writeDB(personas);
+        await savePersonasData(personas);
         return { success: true };
     });
 
     fastify.post('/personas/import_mass', async (request, reply) => {
         const { importedData } = request.body;
         if (!importedData || !Array.isArray(importedData)) return { success: false };
-        const current = await readDB();
+
+        const current = await getPersonasData();
+        const filenameMap = new Map(current.map((p, idx) => [p.filename, idx]));
 
         importedData.forEach(newItem => {
-            const idx = current.findIndex(c => c.filename === newItem.filename && newItem.filename !== '');
-            if (idx > -1) current[idx] = { ...current[idx], ...newItem };
-            else current.push(newItem);
+            if (newItem.filename && filenameMap.has(newItem.filename)) {
+                const idx = filenameMap.get(newItem.filename);
+                current[idx] = { ...current[idx], ...newItem };
+            } else {
+                current.push(newItem);
+            }
         });
 
-        await writeDB(current);
+        personasCache = await healPersonas(current);
+        await savePersonasData(personasCache);
         return { success: true };
     });
 
@@ -129,9 +169,17 @@ module.exports = async function (fastify, opts) {
         await ensureDB();
 
         const data = await request.file();
-        let requestFilename = data.fields.filename.value;
+        if (!data) {
+            return reply.code(400).send({ success: false, error: 'Файл не передан' });
+        }
+
+        // Безопасное извлечение имени файла без краша
+        let requestFilename = data.fields?.filename?.value || data.filename || '';
+        requestFilename = sanitizeFilename(requestFilename);
+
         const imageBuffer = await data.toBuffer();
-        if (requestFilename.includes('-.png') || requestFilename.trim() === '') {
+
+        if (!requestFilename || requestFilename.includes('-.png') || requestFilename === '.png') {
             requestFilename = `avatar_upload_${Date.now()}.png`;
         }
 
@@ -145,21 +193,36 @@ module.exports = async function (fastify, opts) {
     });
 
     fastify.delete('/personas/:id', async (request, reply) => {
-        const personas = await readDB();
-        const target = personas.find(p => p.id === request.params.id);
+        const targetId = request.params.id;
+        const personas = await getPersonasData();
+        const target = personas.find(p => p.id === targetId);
 
         if (target && target.filename) {
-            try { await fs.unlink(path.join(avatarsDir, target.filename)); } catch (e) { }
+            // ПРОВЕРКА: Удаляем файл с диска ТОЛЬКО если эта аватарка не используется другой персоной
+            const isAvatarShared = personas.some(p => p.id !== targetId && p.filename === target.filename);
+
+            if (!isAvatarShared) {
+                try {
+                    await fs.unlink(path.join(avatarsDir, target.filename));
+                } catch (e) { }
+            }
         }
 
-        const filtered = personas.filter(p => p.id !== request.params.id);
-        await writeDB(filtered);
+        const filtered = personas.filter(p => p.id !== targetId);
+        await savePersonasData(filtered);
         return { success: true };
     });
 
     fastify.post('/personas/copy_avatar', async (request, reply) => {
-        const { source, destination } = request.body;
-        if (!source || !destination) return { success: false };
+        let { source, destination } = request.body || {};
+
+        // Санитизация путей
+        source = sanitizeFilename(source);
+        destination = sanitizeFilename(destination);
+
+        if (!source || !destination) {
+            return { success: false, error: 'Некорректные имена файлов' };
+        }
 
         const sourcePath = path.join(avatarsDir, source);
         const destPath = path.join(avatarsDir, destination);

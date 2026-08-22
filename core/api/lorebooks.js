@@ -70,7 +70,7 @@ module.exports = async function (fastify, opts) {
         const newBook = {
             id,
             name: 'НОВЫЙ ЛОРБУК',
-            scanDepth: 100, budget: 2048, recursion: 1,
+            scanDepth: 10, budget: 32768, recursion: 1,
             strategy: 'even', caseSensitive: false, exactMatch: true, recursiveScan: false,
             categories: []
         };
