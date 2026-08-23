@@ -213,9 +213,8 @@ module.exports = async function (fastify, opts) {
         }
     });
 
-    // === ИНФЕРЕНС ПЕРЕСКАЗА С ПОЛНОЙ ПЕРЕДАЧЕЙ СЭМПЛЕРОВ ===
     fastify.post('/llm/summarize/generate', async (request, reply) => {
-        const { dialogueText, config, connectionId } = request.body;
+        const { dialogueText, config, connectionId, presetId } = request.body;
 
         const fs = require('fs/promises');
         const path = require('path');
@@ -231,16 +230,40 @@ module.exports = async function (fastify, opts) {
             return reply.code(400).send({ error: 'Активное подключение не найдено' });
         }
 
+        // 1. Вытаскиваем теги мыслей из пресета
+        let openTag = '<think>';
+        let closeTag = '</think>';
+        if (presetId) {
+            try {
+                const presetsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'ai_presets');
+                const preset = JSON.parse(await fs.readFile(path.join(presetsDir, `${presetId}.json`), 'utf-8'));
+                if (preset.reasoning_open_tag) openTag = preset.reasoning_open_tag;
+                if (preset.reasoning_close_tag) closeTag = preset.reasoning_close_tag;
+            } catch (e) { }
+        }
+
+        const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const thinkRegex = new RegExp(`${escapeRegExp(openTag)}[\\s\\S]*?(${escapeRegExp(closeTag)}|$)`, 'gi');
+
         const maxTokens = Number(config?.max_tokens) || 1500;
         const temperature = config?.temperature !== undefined ? Number(config.temperature) : 0.5;
         const topP = config?.top_p !== undefined ? Number(config.top_p) : 0.95;
         const template = config?.template || "{{dialogue}}";
 
-        const promptText = template.replace('{{dialogue}}', dialogueText);
+        // 2. Очищаем входящий диалог
+        const cleanDialogue = dialogueText.includes(openTag)
+            ? dialogueText.replace(thinkRegex, '').trim()
+            : dialogueText;
+
+        const promptText = template.replace('{{dialogue}}', cleanDialogue);
         const url = connection.url.endsWith('/') ? connection.url.slice(0, -1) : connection.url;
         const key = connection.key || '';
         const model = connection.model;
         const apiType = connection.apiType || 'openai';
+
+        const startTime = Date.now();
+        let lastPayload = null;
+        let lastRawResponse = null;
 
         try {
             let resultText = "";
@@ -260,36 +283,37 @@ module.exports = async function (fastify, opts) {
                     model.match(/gemma-4/);
 
                 const callInteractions = async () => {
+                    lastPayload = {
+                        model: rawModelName,
+                        store: false,
+                        input: [{ type: 'user_input', content: [{ type: 'text', text: promptText }] }],
+                        generation_config: { max_output_tokens: maxTokens, temperature: temperature, top_p: topP }
+                    };
                     const res = await fetch(`${baseUrl}/interactions`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-                        body: JSON.stringify({
-                            model: rawModelName,
-                            store: false,
-                            input: [{
-                                type: 'user_input',
-                                content: [{ type: 'text', text: promptText }]
-                            }],
-                            generation_config: { max_output_tokens: maxTokens, temperature: temperature, top_p: topP }
-                        })
+                        body: JSON.stringify(lastPayload)
                     });
                     if (!res.ok) throw new Error(await res.text());
                     const data = await res.json();
+                    lastRawResponse = data;
                     const outStep = data.steps?.find(s => s.type === 'model_output');
                     return outStep?.content?.map(c => c.text || '').join('') || data.output_text || '';
                 };
 
                 const callGenerateContent = async () => {
+                    lastPayload = {
+                        contents: [{ role: 'user', parts: [{ text: promptText }] }],
+                        generationConfig: { maxOutputTokens: maxTokens, temperature: temperature, topP: topP }
+                    };
                     const res = await fetch(`${baseUrl}/${modelPath}:generateContent`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-                        body: JSON.stringify({
-                            contents: [{ role: 'user', parts: [{ text: promptText }] }],
-                            generationConfig: { maxOutputTokens: maxTokens, temperature: temperature, topP: topP }
-                        })
+                        body: JSON.stringify(lastPayload)
                     });
                     if (!res.ok) throw new Error(await res.text());
                     const data = await res.json();
+                    lastRawResponse = data;
                     return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
                 };
 
@@ -311,6 +335,14 @@ module.exports = async function (fastify, opts) {
                 }
 
             } else if (apiType === 'claude') {
+                lastPayload = {
+                    model: model || 'claude-3-haiku-20240307',
+                    max_tokens: maxTokens,
+                    temperature: temperature,
+                    top_p: topP,
+                    messages: [{ role: 'user', content: promptText }]
+                };
+
                 const res = await fetch(`${url}/messages`, {
                     method: 'POST',
                     headers: {
@@ -318,24 +350,19 @@ module.exports = async function (fastify, opts) {
                         'anthropic-version': '2023-06-01',
                         'x-api-key': key
                     },
-                    body: JSON.stringify({
-                        model: model || 'claude-3-haiku-20240307',
-                        max_tokens: maxTokens,
-                        temperature: temperature,
-                        top_p: topP,
-                        messages: [{ role: 'user', content: promptText }]
-                    })
+                    body: JSON.stringify(lastPayload)
                 });
 
                 if (!res.ok) {
                     const errText = await res.text();
+                    lastRawResponse = { error: errText };
                     throw new Error(`Claude API Error: ${errText.slice(0, 300)}`);
                 }
                 const data = await res.json();
+                lastRawResponse = data;
                 resultText = data.content?.[0]?.text || '';
 
             } else {
-                // OpenAI / OpenRouter / Groq / Custom
                 const headers = { 'Content-Type': 'application/json' };
                 if (key) headers['Authorization'] = `Bearer ${key}`;
                 if (apiType === 'openrouter') {
@@ -343,33 +370,64 @@ module.exports = async function (fastify, opts) {
                     headers['X-Title'] = 'Cobalt Tavern';
                 }
 
+                lastPayload = {
+                    model: model,
+                    messages: [{ role: 'user', content: promptText }],
+                    max_tokens: maxTokens,
+                    temperature: temperature,
+                    top_p: topP
+                };
+
                 const res = await fetch(`${url}/chat/completions`, {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify({
-                        model: model,
-                        messages: [{ role: 'user', content: promptText }],
-                        max_tokens: maxTokens,
-                        temperature: temperature,
-                        top_p: topP
-                    })
+                    body: JSON.stringify(lastPayload)
                 });
 
                 if (!res.ok) {
                     const errText = await res.text();
+                    lastRawResponse = { error: errText };
                     throw new Error(`API Error: ${errText.slice(0, 300)}`);
                 }
                 const data = await res.json();
+                lastRawResponse = data;
                 resultText = data.choices?.[0]?.message?.content || '';
             }
 
-            if (!resultText.trim()) {
-                throw new Error('ИИ вернул пустой ответ');
+            // 3. Очищаем итоговый ответ модели
+            if (resultText.includes(openTag)) {
+                resultText = resultText.replace(thinkRegex, '').trim();
             }
 
+            if (!resultText.trim()) {
+                throw new Error('ИИ вернул пустой ответ (или весь ответ состоял из блока мыслей)');
+            }
+
+            // СОХРАНЯЕМ ЛОГ УСПЕШНОГО ПЕРЕСКАЗА
+            const duration = ((Date.now() - startTime) / 1000).toFixed(2) + 's';
+            addGatewayLog({
+                model: (connection.model || connection.apiType) + ' [SUMMARIZE]',
+                status: '200 OK',
+                duration,
+                request: lastPayload,
+                response: lastRawResponse || { text: resultText }
+            });
+
             return { success: true, text: resultText.trim() };
+
         } catch (error) {
             fastify.log.error(`[SUMMARIZE LLM ERROR]: ${error.message}`);
+
+            // СОХРАНЯЕМ ЛОГ ОШИБКИ
+            const duration = ((Date.now() - startTime) / 1000).toFixed(2) + 's';
+            addGatewayLog({
+                model: (connection?.model || connection?.apiType || 'unknown') + ' [SUMMARIZE]',
+                status: '500 ERROR',
+                duration,
+                request: lastPayload,
+                response: lastRawResponse || { error: error.message }
+            });
+
             return reply.code(500).send({ error: error.message || 'Сбой генерации пересказа' });
         }
     });
