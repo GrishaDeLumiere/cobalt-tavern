@@ -29,12 +29,14 @@ module.exports = async function (fastify, opts) {
     const userDir = path.join(ROOT_DATA_DIR, DEFAULT_USER);
     const settingsPath = path.join(userDir, 'settings.json');
     const presetsPath = path.join(userDir, 'theme_presets.json');
+    const regexPath = path.join(userDir, 'regex_rules.json');
     const fontsDir = path.join(userDir, 'fonts');
     const avatarDir = path.join(userDir, 'user_profile');
 
     // Кэш настроек в памяти
     let settingsCache = null;
     let themePresetsCache = null;
+    let regexRulesCache = null;
 
     const ensureUserDirs = async () => {
         try { await fs.access(userDir); } catch { await fs.mkdir(userDir, { recursive: true }); }
@@ -124,6 +126,33 @@ module.exports = async function (fastify, opts) {
         } catch (err) {
             fastify.log.error('Ошибка загрузки аватара пользователя:', err);
             return reply.code(500).send({ error: 'Avatar upload failed' });
+        }
+    });
+
+    // === ИЗОЛИРОВАННАЯ БАЗА REGEX ПРАВИЛ (regex_rules.json) ===
+    fastify.get('/system/regex', async (request, reply) => {
+        if (regexRulesCache) return regexRulesCache;
+        await ensureUserDirs();
+        try {
+            const data = await fs.readFile(regexPath, 'utf-8');
+            regexRulesCache = JSON.parse(data);
+            return regexRulesCache;
+        } catch (err) {
+            regexRulesCache = [];
+            return [];
+        }
+    });
+
+    fastify.post('/system/regex', async (request, reply) => {
+        await ensureUserDirs();
+        try {
+            const rules = request.body || [];
+            regexRulesCache = rules;
+            await fs.writeFile(regexPath, JSON.stringify(rules, null, 4), 'utf-8');
+            return { success: true, count: rules.length };
+        } catch (err) {
+            fastify.log.error('Ошибка записи regex_rules.json:', err);
+            return reply.code(500).send({ error: 'Failed to save regex rules' });
         }
     });
 

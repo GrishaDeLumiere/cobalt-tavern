@@ -385,12 +385,25 @@ const buildPrompt = async (payload) => {
         }
     }
 
-    const outgoingRules = (sysConfig?.regexRules || []).filter(r => {
+    // Читаем изолированный файл regex_rules.json для зоны outgoing
+    let regexRules = sysConfig?.regexRules;
+    if (!regexRules || regexRules.length === 0) {
+        try {
+            const regexFile = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'regex_rules.json');
+            regexRules = JSON.parse(await fs.readFile(regexFile, 'utf-8'));
+        } catch (e) {
+            regexRules = [];
+        }
+    }
+
+    const outgoingRules = (regexRules || []).filter(r => {
         const pArr = Array.isArray(r.placement) ? r.placement : [r.placement];
         return r.active && pArr.includes('outgoing') && r.pattern;
     });
+
     if (outgoingRules.length > 0) {
         rawPayload.forEach(m => {
+            if (!m.content) return;
             outgoingRules.forEach(r => {
                 try {
                     const reg = new RegExp(r.pattern, r.flags || 'g');

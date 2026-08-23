@@ -81,6 +81,18 @@ const defaultAuthorNotesDb = {
     }
 };
 
+const defaultRegexRules = [
+    {
+        id: 'rx_default_nodisplay',
+        name: 'Скрытие тегов <nodisplay>',
+        active: true,
+        pattern: '<nodisplay>[\\s\\S]*?<\\/nodisplay>',
+        replacement: '',
+        placement: ['outgoing'],
+        flags: 'gi'
+    }
+];
+
 async function checkAndCreateDir(dirPath) {
     try {
         await fs.access(dirPath);
@@ -186,6 +198,63 @@ async function initializeFilesystem() {
     } catch (e) {
         await fs.writeFile(summarizeConfigPath, JSON.stringify(defaultSummarizeConfig, null, 4), 'utf-8');
         console.log('[SYS_INIT] Создан конфигурационный файл пересказа: summarize_config.json');
+    }
+
+    // 6. ИЗОЛИРОВАННАЯ БАЗА REGEX-ФИЛЬТРОВ (С АВТОМИГРАЦИЕЙ СТАРЫХ ПРАВИЛ)
+    const regexPath = path.join(userDirPath, 'regex_rules.json');
+    try {
+        await fs.access(regexPath);
+        console.log('[SYS_INIT] База Regex-правил найдена: regex_rules.json');
+
+        try {
+            const rawSettings = await fs.readFile(settingsPath, 'utf-8');
+            const parsedSettings = JSON.parse(rawSettings);
+            if (parsedSettings.regexRules && Array.isArray(parsedSettings.regexRules) && parsedSettings.regexRules.length > 0) {
+                const currentRegexRaw = await fs.readFile(regexPath, 'utf-8');
+                const currentRegex = JSON.parse(currentRegexRaw);
+
+                const existingIds = new Set(currentRegex.map(r => r.id));
+                const toMigrate = parsedSettings.regexRules.filter(r => !existingIds.has(r.id));
+
+                if (toMigrate.length > 0) {
+                    const merged = [...currentRegex, ...toMigrate];
+                    await fs.writeFile(regexPath, JSON.stringify(merged, null, 4), 'utf-8');
+                    console.log(`[SYS_MIGRATION] Дополнительно перенесено ${toMigrate.length} правил в regex_rules.json`);
+                }
+
+                delete parsedSettings.regexRules;
+                await fs.writeFile(settingsPath, JSON.stringify(parsedSettings, null, 4), 'utf-8');
+            }
+        } catch (mErr) { }
+
+    } catch (e) {
+        let migratedRules = [...defaultRegexRules];
+        let foundOldRules = false;
+
+        try {
+            const rawSettings = await fs.readFile(settingsPath, 'utf-8');
+            const parsedSettings = JSON.parse(rawSettings);
+
+            if (parsedSettings.regexRules && Array.isArray(parsedSettings.regexRules) && parsedSettings.regexRules.length > 0) {
+                const userOldRules = parsedSettings.regexRules;
+                const hasNodisplay = userOldRules.some(r => r.id === 'rx_default_nodisplay' || (r.pattern && r.pattern.includes('nodisplay')));
+
+                migratedRules = hasNodisplay ? userOldRules : [...userOldRules, ...defaultRegexRules];
+                foundOldRules = true;
+                console.log(`[SYS_MIGRATION] ОБНАРУЖЕНО ${userOldRules.length} СТАРЫХ REGEX-ПРАВИЛ! Запуск миграции...`);
+
+                delete parsedSettings.regexRules;
+                await fs.writeFile(settingsPath, JSON.stringify(parsedSettings, null, 4), 'utf-8');
+                console.log('[SYS_MIGRATION] Файл settings.json успешно очищен от старых правил.');
+            }
+        } catch (readErr) { }
+
+        await fs.writeFile(regexPath, JSON.stringify(migratedRules, null, 4), 'utf-8');
+        if (foundOldRules) {
+            console.log(`[SYS_INIT] МИГРАЦИЯ УСПЕШНА: Все ${migratedRules.length} правил сохранены в regex_rules.json`);
+        } else {
+            console.log('[SYS_INIT] Создана изолированная база регулярных выражений: regex_rules.json');
+        }
     }
 
     console.log('[SYS_INIT] Файловая система готова к работе. Aegis Shield: ON\n');
