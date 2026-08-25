@@ -278,6 +278,10 @@ module.exports = {
                 top_p: samplers.top_p
             };
 
+            if (!isAgentModel) {
+                payload.generation_config.thinking_summaries = 'auto';
+            }
+
             if (samplers.google_send_safety) {
                 payload.safety_settings = safetySettingsArr;
             }
@@ -349,6 +353,9 @@ module.exports = {
         let errorStatus = null;
         let rawResponseData = null;
 
+        const openTag = prefillTag || '<think>';
+        const closeTag = openTag.replace('<', '</');
+
         try {
             response = await fetch(endpoint, {
                 method: 'POST',
@@ -403,10 +410,33 @@ module.exports = {
                 rawResponseData = data;
 
                 if (isInteractionsAPI) {
+                    let thoughtText = '';
+                    const thoughtStep = data.steps?.find(s => s.type === 'thought');
+                    if (thoughtStep?.summary && Array.isArray(thoughtStep.summary)) {
+                        thoughtText = thoughtStep.summary.map(c => c.text || '').join('');
+                    }
+
                     const outStep = data.steps?.find(s => s.type === 'model_output');
-                    fullGeneratedText = outStep?.content?.map(c => c.text || '').join('') || data.output_text || '';
+                    const outputText = outStep?.content?.map(c => c.text || '').join('') || data.output_text || '';
+
+                    if (thoughtText) {
+                        fullGeneratedText = `${openTag}\n${thoughtText}\n${closeTag}\n\n${outputText}`;
+                    } else {
+                        fullGeneratedText = outputText;
+                    }
                 } else {
-                    fullGeneratedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                    const parts = data.candidates?.[0]?.content?.parts || [];
+                    let thoughtText = '';
+                    let outputText = '';
+                    for (const p of parts) {
+                        if (p.thought) thoughtText += p.text || '';
+                        else if (p.text) outputText += p.text;
+                    }
+                    if (thoughtText) {
+                        fullGeneratedText = `${openTag}\n${thoughtText}\n${closeTag}\n\n${outputText}`;
+                    } else {
+                        fullGeneratedText = outputText;
+                    }
                 }
 
                 if (!replyRaw.writableEnded) {
@@ -434,8 +464,6 @@ module.exports = {
 
         // Флаг и теги для перехвата нативных размышлений агента
         let inThoughtStep = false;
-        const openTag = prefillTag || '<think>';
-        const closeTag = openTag.replace('<', '</');
 
         const processChunk = (line) => {
             const trimmed = line.trim();
@@ -453,16 +481,17 @@ module.exports = {
                 // INTERACTIONS API PARSER (С ПЕРЕХВАТОМ МЫСЛЕЙ)
                 // ==========================================
                 if (data.event_type) {
-                    // НАЧАЛО МЫСЛЕЙ (АГЕНТ)
                     if (data.event_type === 'step.start' && data.step?.type === 'thought') {
                         inThoughtStep = true;
                         let chunk = openTag + '\n';
+                        if (data.step.summary && Array.isArray(data.step.summary)) {
+                            chunk += data.step.summary.map(c => c.text || '').join('');
+                        }
                         fullGeneratedText += chunk;
                         if (!replyRaw.writableEnded) {
                             replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
                         }
                     }
-                    // КОНЕЦ МЫСЛЕЙ (АГЕНТ)
                     else if (data.event_type === 'step.stop' && inThoughtStep) {
                         inThoughtStep = false;
                         let chunk = '\n' + closeTag + '\n\n';
@@ -471,15 +500,18 @@ module.exports = {
                             replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
                         }
                     }
-                    // ПОТОК ДАННЫХ
                     else if (data.event_type === 'step.delta') {
                         let chunk = "";
 
-                        if (data.delta?.type === 'text' && data.delta.text) {
-                            chunk = data.delta.text;
+                        if (data.delta?.type === 'thought_summary') {
+                            if (Array.isArray(data.delta.content)) {
+                                chunk = data.delta.content.map(c => c.text || '').join('');
+                            } else {
+                                chunk = data.delta.text || data.delta.content?.text || '';
+                            }
                         }
-                        else if (data.delta?.type === 'thought_summary' && data.delta.content?.text) {
-                            chunk = data.delta.content.text;
+                        else if (data.delta?.type === 'text' && data.delta.text) {
+                            chunk = data.delta.text;
                         }
 
                         if (chunk) {
@@ -489,7 +521,6 @@ module.exports = {
                             }
                         }
                     }
-                    // ОШИБКА
                     else if (data.event_type === 'error') {
                         const reasonAlert = data.error?.message || `Сбой генерации (Interactions API)`;
                         errorStatus = `200 STOPPED (ERROR)`;
