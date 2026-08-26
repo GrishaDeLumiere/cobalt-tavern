@@ -1,3 +1,7 @@
+<div align="right">
+  <strong>🇷🇺 Русский</strong> | <a href="README.md">🇬🇧 English</a>
+</div>
+
 <a name="readme-top"></a>
 
 <div align="center">
@@ -63,7 +67,7 @@
 
 * **ОС:** Windows 10/11, Linux, macOS
 * **Среда:** Node.js v18 или выше
-* **Железо:** Сам проект потребляет минимум ресурсов CPU/RAM. Нагрузка ложится исключительно сервер инференса LLM (KoboldCpp, LM Studio, Oobabooga и т.д.), к которому вы подключаетесь.
+* **Железо:** Сам проект потребляет минимум ресурсов CPU/RAM. Нагрузка ложится исключительно на сервер инференса LLM (KoboldCpp, LM Studio, Oobabooga и т.д.), к которому вы подключаетесь.
 
 ## 🛠 Установка и запуск
 
@@ -101,4 +105,3 @@
 <p align="center">
   <sub>Разработано с 💜 <b>GrishaDeLumiere</b></sub>
 </p>
-
