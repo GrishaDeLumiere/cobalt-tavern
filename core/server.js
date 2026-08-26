@@ -64,6 +64,7 @@ const startSystem = async () => {
         fastify.register(require('./api/syntax'), { prefix: '/api' });
         fastify.register(require('./api/updater'), { prefix: '/api' });
         fastify.register(require('./api/llm'), { prefix: '/api' });
+        fastify.register(require('./api/summarize'), { prefix: '/api/llm' });
         fastify.register(require('./api/tokenizer'), { prefix: '/api' });
         fastify.register(require('./api/author_notes'), { prefix: '/api' });
 
