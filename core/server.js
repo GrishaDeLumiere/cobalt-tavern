@@ -2,23 +2,52 @@ const fastify = require('fastify')({
     logger: {
         transport: {
             target: 'pino-pretty',
-            options: { translateTime: 'HH:MM:ss Z', ignore: 'pid,hostname' }
+            options: {
+                translateTime: 'HH:MM:ss Z',
+                ignore: 'pid,hostname'
+            }
         }
     },
     bodyLimit: 262144000 // 250 MB
 });
 
+const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const { initializeFilesystem } = require('./system/init');
 
+// === МОДУЛЬ КОНФИГУРАЦИИ ===
+const CONFIG_PATH = path.join(__dirname, 'config.json');
+
+const DEFAULT_CONFIG = {
+    port: 8000,
+    host: '0.0.0.0',
+    autoOpenBrowser: true
+};
+
+function loadOrCreateConfig() {
+    try {
+        if (!fs.existsSync(CONFIG_PATH)) {
+            fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 4), 'utf-8');
+            console.log(`[CONFIG] Создан файл конфигурации по умолчанию: ${CONFIG_PATH}`);
+            return DEFAULT_CONFIG;
+        }
+        const data = fs.readFileSync(CONFIG_PATH, 'utf-8');
+        return { ...DEFAULT_CONFIG, ...JSON.parse(data) };
+    } catch (err) {
+        console.error('[CONFIG_ERROR] Ошибка чтения config.json, применены настройки по умолчанию:', err.message);
+        return DEFAULT_CONFIG;
+    }
+}
+
+// Загружаем конфиг
+const appConfig = loadOrCreateConfig();
+const PORT = Number(process.env.PORT) || Number(appConfig.port) || 8080;
+const HOST = process.env.HOST || appConfig.host || '0.0.0.0';
+
 // Тестовый эндпоинт для проверки связи
 fastify.get('/ping', async (request, reply) => {
-    return {
-        status: 'Cobalt Core Online',
-        system: 'Aegis Active',
-        fps_drop: false
-    };
+    return { status: 'Cobalt Core Online', system: 'Aegis Active', fps_drop: false };
 });
 
 // === ФУНКЦИЯ ХОЛОДНОГО СТАРТА ЯДРА ===
@@ -72,16 +101,16 @@ const startSystem = async () => {
             reply.redirect(`/api/thumbnail?file=${req.query.file || ''}`);
         });
 
-        // 4. Поднимаем вычислительный узел
-        await fastify.listen({ port: 8000, host: '0.0.0.0' });
+        // 4. Поднимаем вычислительный узел с динамическим портом
+        await fastify.listen({ port: PORT, host: HOST });
 
         console.log('\n[COBALT CORE] Главное ядро запущено. Ожидание сигналов...');
-        console.log('[COBALT CORE] REST Gateway: http://localhost:8000\n');
+        console.log(`[COBALT CORE] REST Gateway: http://localhost:${PORT}\n`);
 
-        // 5. ОТКРЫТИЕ БРАУЗЕРА (Только если не дев-режим)
-        if (!isDev) {
+        // 5. ОТКРЫТИЕ БРАУЗЕРА (Только если не дев-режим и разрешено в конфиге)
+        if (!isDev && appConfig.autoOpenBrowser !== false) {
             console.log('[SYSTEM] Launching terminal in browser...');
-            const url = 'http://127.0.0.1:8000/';
+            const url = `http://127.0.0.1:${PORT}/`;
 
             if (process.platform === 'win32') {
                 exec(`start ${url}`);

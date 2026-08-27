@@ -27,6 +27,8 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+config.json
+config.local.json
 
 # 6. МУСОР ОПЕРАЦИОННЫХ СИСТЕМ
 .DS_Store

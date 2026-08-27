@@ -76,7 +76,25 @@ Engineered as a faster, strictly deterministic, and fully controllable alternati
    ```
 2. Navigate to the project directory.
 3. Run `start.bat` (on Windows) or launch via Node.
-4. The bootstrap loader handles everything automatically: installs missing dependencies, spawns the REST API gateway on port `8000`, and opens the UI in your default browser.
+4. The bootstrap loader handles everything automatically: installs missing dependencies, spawns the REST API gateway, and opens the UI in your default browser.
+
+### ⚙️ Configuration (Changing Port & Host)
+
+On its first cold start, the engine generates a `config.json` file in the root directory. If the default port is already in use or you need custom network routing, edit this file:
+
+```json
+{
+    "port": 8000,
+    "host": "0.0.0.0",
+    "autoOpenBrowser": true
+}
+```
+
+* `port` — network port for the REST Gateway and Web UI (defaults to `8000`).
+* `host` — network interface binding (`0.0.0.0` for LAN access, `127.0.0.1` for local-only isolation).
+* `autoOpenBrowser` — whether to automatically launch the interface in your default browser upon launch (`true` / `false`).
+
+> *Note: Environment variables such as `PORT` take precedence over `config.json` if present.*
 
 ## 📫 Feedback & Issue Tracking
 
