@@ -59,12 +59,37 @@ const llmPlugin = async function (fastify, opts) {
 
     fastify.post('/llm/test', async (request, reply) => {
         const { url, key, model, apiType } = request.body;
+        const startTime = Date.now();
+
         try {
             const provider = getProvider(apiType);
-            const text = await provider.test(url, key, model, apiType);
+            const result = await provider.test(url, key, model, apiType);
+
+            // Поддержка как старого формата (строка), так и нового (объект)
+            const text = typeof result === 'string' ? result : result.text;
+            const duration = ((Date.now() - startTime) / 1000).toFixed(2) + 's';
+
+            addGatewayLog({
+                model: model || apiType,
+                status: '200 OK (TEST)',
+                duration,
+                request: result.rawRequest || { action: 'test_connection', model },
+                response: result.rawResponse || { text }
+            });
+
             return { success: true, text };
         } catch (error) {
+            const duration = ((Date.now() - startTime) / 1000).toFixed(2) + 's';
             fastify.log.error(`[LLM GATEWAY TEST] ${apiType} Error: ${error.message}`);
+
+            addGatewayLog({
+                model: model || apiType,
+                status: '500 ERROR (TEST)',
+                duration,
+                request: { action: 'test_connection', url, model },
+                response: { error: error.message }
+            });
+
             return reply.code(500).send({ error: 'СБОЙ ИНФЕРЕНСА', details: error.message });
         }
     });

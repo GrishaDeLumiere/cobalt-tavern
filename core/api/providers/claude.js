@@ -60,7 +60,9 @@ module.exports = {
         }
 
         const data = await res.json();
-        return data.content?.[0]?.text?.trim() || 'ПУСТОЙ ОТВЕТ ОТ CLAUDE';
+        const text = data.content?.[0]?.text?.trim() || 'ПУСТОЙ ОТВЕТ ОТ CLAUDE';
+
+        return { text, rawRequest: payload, rawResponse: data };
     },
 
     async generateStream({ url, key, model, messages, samplers, replyRaw, prefillTag, signal, onLog }) {

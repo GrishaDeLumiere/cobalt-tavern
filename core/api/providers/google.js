@@ -71,12 +71,16 @@ module.exports = {
 
         const data = await res.json();
 
+        let text = 'ПУСТОЙ ОТВЕТ';
+
         if (isInteractionsAPI) {
             const outStep = data.steps?.find(s => s.type === 'model_output');
-            return outStep?.content?.map(c => c.text || '').join('') || data.output_text || 'ПУСТОЙ ОТВЕТ (INTERACTIONS)';
+            text = outStep?.content?.map(c => c.text || '').join('') || data.output_text || 'ПУСТОЙ ОТВЕТ (INTERACTIONS)';
+        } else {
+            text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'ПУСТОЙ ОТВЕТ';
         }
 
-        return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'ПУСТОЙ ОТВЕТ';
+        return { text, rawRequest: payload, rawResponse: data };
     },
 
     async generateStream({ url, key, model, messages, samplers, replyRaw, prefillTag, signal, onLog }) {

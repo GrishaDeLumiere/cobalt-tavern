@@ -65,7 +65,9 @@ module.exports = {
         }
 
         const data = await res.json();
-        return data.choices?.[0]?.message?.content?.trim() || 'ПУСТОЙ ОТВЕТ';
+        const text = data.choices?.[0]?.message?.content?.trim() || 'ПУСТОЙ ОТВЕТ';
+
+        return { text, rawRequest: payload, rawResponse: data };
     },
 
     async generateStream({ url, key, model, messages, samplers, replyRaw, prefillTag, signal, onLog }) {
