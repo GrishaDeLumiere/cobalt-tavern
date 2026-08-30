@@ -224,7 +224,9 @@ module.exports = {
 
         // 3. НАТИВНАЯ СИСТЕМА (ЕСЛИ ВЫКЛЮЧЕНА, ПРЯЧЕМ В ЮЗЕРА)
         if (systemLines.trim() && !samplers.native_system_prompt) {
-            const sysText = `[SYSTEM INSTRUCTIONS]\n${systemLines.trim()}\n\n`;
+            const sysText = isAgentModel
+                ? `<system_directive>\n${systemLines.trim()}\n</system_directive>\n\n`
+                : `[SYSTEM INSTRUCTIONS]\n${systemLines.trim()}\n\n`;
             const firstUserIndex = geminiContents.findIndex(m => isInteractionsAPI ? m.type === 'user_input' : m.role === 'user');
 
             if (firstUserIndex !== -1) {
@@ -270,50 +272,76 @@ module.exports = {
         // СБОРКА PAYLOAD 
         // ==========================================
         if (isInteractionsAPI) {
-            payload.model = modelPath.replace('models/', '');
             if (isStreaming) payload.stream = true;
-
-            payload.store = false;
+            if (!isAgentModel) {
+                payload.store = false;
+            } else {
+                payload.store = true;
+            }
             payload.input = geminiContents;
 
-            payload.generation_config = {
-                temperature: samplers.temperature,
-                max_output_tokens: samplers.max_tokens,
-                top_p: samplers.top_p
-            };
+            if (isAgentModel) {
+                // 1. ИДЕНТИФИКАТОР АГЕНТА
+                payload.agent = modelPath.replace('models/', '');
 
-            if (!isAgentModel) {
-                payload.generation_config.thinking_summaries = 'auto';
+                // 2. КОНФИГ АГЕНТА (Строго type: antigravity, без temperature/top_p)
+                payload.agent_config = {
+                    type: "antigravity"
+                };
+                if (samplers.max_tokens) {
+                    payload.agent_config.max_total_tokens = samplers.max_tokens;
+                }
+
+                // 3. ОКРУЖЕНИЕ (ОБЯЗАТЕЛЬНЫЙ ПАРАМЕТР)
+                if (systemLines.trim()) {
+                    payload.environment = {
+                        type: "remote",
+                        sources: [{
+                            type: "inline",
+                            target: ".agents/AGENTS.md",
+                            content: systemLines.trim()
+                        }]
+                    };
+                } else {
+                    payload.environment = "remote";
+                }
+
+            } else {
+                payload.model = modelPath.replace('models/', '');
+                payload.generation_config = {
+                    temperature: samplers.temperature,
+                    max_output_tokens: samplers.max_tokens,
+                    top_p: samplers.top_p,
+                    thinking_summaries: 'auto'
+                };
+
+                if (systemLines.trim() && samplers.native_system_prompt) {
+                    payload.system_instruction = { parts: [{ text: systemLines.trim() }] };
+                }
+
+                if (samplers.reasoning_effort && samplers.reasoning_effort !== 'auto') {
+                    let effort = samplers.reasoning_effort;
+                    const isGemini3 = model.includes('gemini-3');
+
+                    if (isGemini3) {
+                        if (effort === 'min') effort = 'minimal';
+                        if (effort === 'max') effort = 'high';
+                        payload.generation_config.thinking_level = effort.toLowerCase();
+                    } else {
+                        let budget = -1;
+                        if (effort === 'min' || effort === 'low') budget = 1024;
+                        else if (effort === 'medium') budget = 8192;
+                        else if (effort === 'high' || effort === 'max') budget = 24576;
+
+                        if (budget !== -1) {
+                            payload.generation_config.thinking_budget = budget;
+                        }
+                    }
+                }
             }
 
             if (samplers.google_send_safety) {
                 payload.safety_settings = safetySettingsArr;
-            }
-
-            if (systemLines.trim() && samplers.native_system_prompt) {
-                payload.system_instruction = { parts: [{ text: systemLines.trim() }] };
-            }
-
-            // Для агентов типа Deep Research и Antigravity мы НЕ ШЛЕМ thinking...
-            if (samplers.reasoning_effort && samplers.reasoning_effort !== 'auto' && !isAgentModel) {
-                let effort = samplers.reasoning_effort;
-                const isGemini3 = model.includes('gemini-3');
-
-                if (isGemini3) {
-                    if (effort === 'min') effort = 'minimal';
-                    if (effort === 'max') effort = 'high';
-                    payload.generation_config.thinking_level = effort.toLowerCase();
-
-                } else {
-                    let budget = -1;
-                    if (effort === 'min' || effort === 'low') budget = 1024;
-                    else if (effort === 'medium') budget = 8192;
-                    else if (effort === 'high' || effort === 'max') budget = 24576;
-
-                    if (budget !== -1) {
-                        payload.generation_config.thinking_budget = budget;
-                    }
-                }
             }
         } else {
             payload.contents = geminiContents;
