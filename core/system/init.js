@@ -14,7 +14,8 @@ const USER_DIRS = [
     'lorebooks',
     'avatars',
     'plugins',
-    'fonts'
+    'fonts',
+    'personas'
 ];
 
 // Дефолтный конфиг приложения (настройки)
@@ -255,6 +256,31 @@ async function initializeFilesystem() {
         } else {
             console.log('[SYS_INIT] Создана изолированная база регулярных выражений: regex_rules.json');
         }
+    }
+
+    // 7. МИГРАЦИЯ ПЕРСОН (Разделение монолита personas_db.json на модули)
+    const oldPersonasDbPath = path.join(userDirPath, 'personas_db.json');
+    const personasDir = path.join(userDirPath, 'personas');
+    const personasOrderPath = path.join(userDirPath, 'personas_order.json');
+    try {
+        await fs.access(oldPersonasDbPath);
+        const rawOldPersonas = await fs.readFile(oldPersonasDbPath, 'utf-8');
+        const parsedOld = JSON.parse(rawOldPersonas).personas || [];
+
+        console.log(`[SYS_MIGRATION] ОБНАРУЖЕН МОНОЛИТ ПЕРСОН! Начинаю разрезку ${parsedOld.length} субъектов...`);
+        let order = [];
+        for (const p of parsedOld) {
+            if (!p.id) p.id = `user_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+            await fs.writeFile(path.join(personasDir, `${p.id}.json`), JSON.stringify(p, null, 4), 'utf-8');
+            order.push(p.id);
+        }
+        await fs.writeFile(personasOrderPath, JSON.stringify(order), 'utf-8');
+
+        // Бэкапим старый файл, чтобы он больше не мешал
+        await fs.rename(oldPersonasDbPath, path.join(userDirPath, 'personas_db.backup.json'));
+        console.log('[SYS_MIGRATION] Миграция персон успешно завершена! Архитектура разделена на модули.');
+    } catch (e) {
+        // Если файла нет, значит база уже разделена или чистая, игнорим
     }
 
     console.log('[SYS_INIT] Файловая система готова к работе. Aegis Shield: ON\n');

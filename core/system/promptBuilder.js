@@ -141,11 +141,32 @@ const buildPrompt = async (payload) => {
     } catch (e) { console.error('[BUILDER] Сбой чтения базы персонажей'); }
 
     let persona = null;
-    if (personaId) {
+    const finalPersonaId = personaId || sysConfig?.activePersonaId;
+    if (finalPersonaId) {
+        const personaFilePath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'personas', `${finalPersonaId}.json`);
         try {
-            const personasDb = JSON.parse(await fs.readFile(personasDbPath, 'utf-8'));
-            persona = personasDb.personas.find(p => p.id === personaId);
-        } catch (e) { }
+            persona = JSON.parse(await fs.readFile(personaFilePath, 'utf-8'));
+        } catch (e) {
+            try {
+                const personasDb = JSON.parse(await fs.readFile(personasDbPath, 'utf-8'));
+                persona = (personasDb.personas || []).find(p => p.id === finalPersonaId);
+            } catch (err) { }
+        }
+
+        if (persona && Array.isArray(persona.modules)) {
+            const activeModules = persona.modules.filter(m =>
+                m.type !== 'category' &&
+                m.isEnabled !== false &&
+                m.content &&
+                m.content.trim() !== ''
+            );
+
+            if (activeModules.length > 0) {
+                const modulesText = activeModules.map(m => m.content.trim()).join('\n\n');
+                persona.text = persona.text ? `${persona.text}\n\n${modulesText}` : modulesText;
+                persona.description = persona.text;
+            }
+        }
     }
 
     const charName = character?.name || chat.character_name || 'System';
