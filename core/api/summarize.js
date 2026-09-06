@@ -67,7 +67,8 @@ module.exports = async function (fastify, opts) {
                 abortController.abort();
             }
         };
-        request.raw.on('close', onClientClose);
+        // Слушаем именно reply.raw!
+        reply.raw.on('close', onClientClose);
 
         let connection = null;
         try {
@@ -76,7 +77,7 @@ module.exports = async function (fastify, opts) {
         } catch (e) { }
 
         if (!connection) {
-            request.raw.removeListener('close', onClientClose);
+            reply.raw.removeListener('close', onClientClose);
             return reply.code(400).send({ error: 'Активное подключение не найдено' });
         }
 
@@ -307,7 +308,7 @@ module.exports = async function (fastify, opts) {
             }
             return reply.code(500).send({ error: error.message || 'Сбой генерации пересказа' });
         } finally {
-            request.raw.removeListener('close', onClientClose);
+            reply.raw.removeListener('close', onClientClose);
         }
     });
 };

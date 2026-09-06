@@ -97,6 +97,8 @@ const startSystem = async () => {
         fastify.register(require('./api/tokenizer'), { prefix: '/api' });
         fastify.register(require('./api/author_notes'), { prefix: '/api' });
 
+        //fastify.register(require('./tactic/tactical'), { prefix: '/api' });
+
         fastify.get('/thumbnail', (req, reply) => {
             reply.redirect(`/api/thumbnail?file=${req.query.file || ''}`);
         });

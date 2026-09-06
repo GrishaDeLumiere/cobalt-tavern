@@ -43,3 +43,6 @@ Desktop.ini
 *.njsproj
 *.sln
 *.sw?
+
+# 8. ЭКСПЕРИМЕНТАЛЬНЫЕ ПАПКИ
+core/tactic/
