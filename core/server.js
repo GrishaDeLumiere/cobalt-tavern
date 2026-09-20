@@ -78,7 +78,19 @@ const startSystem = async () => {
                 reply.sendFile('index.html');
             });
         } else {
-            console.log('[SYS_INIT] Режим РАЗРАБОТКИ. Раздача статики отключена.');
+            console.log('[SYS_INIT] Режим РАЗРАБОТКИ. Раздача статики отключена. Включен форвард на Vite (127.0.0.1:5173).');
+            const DEV_UI_URL = 'http://127.0.0.1:5173';
+
+            fastify.get('/', (req, reply) => {
+                reply.redirect(DEV_UI_URL, 302);
+            });
+
+            fastify.setNotFoundHandler((req, reply) => {
+                if (!req.url.startsWith('/api') && !req.url.startsWith('/data')) {
+                    return reply.redirect(`${DEV_UI_URL}${req.url}`, 302);
+                }
+                reply.code(404).send({ error: 'Route not found' });
+            });
         }
 
         // 3. Подключаем API модули
