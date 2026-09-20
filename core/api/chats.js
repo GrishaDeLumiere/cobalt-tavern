@@ -38,7 +38,29 @@ let serverChatsCache = null;
 const buildChatsIndex = async () => {
     console.log('[CACHE] Построение индекса сессий...');
     const chatsDir = getChatsDir();
+    const personasDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'personas');
     let chats = [];
+
+    const personasMap = new Map();
+    const personasAvatarMap = new Map();
+    const personasIdMap = new Map();
+
+    try {
+        const pFiles = await fs.readdir(personasDir);
+        for (const file of pFiles) {
+            if (file.endsWith('.json')) {
+                try {
+                    const rawP = await fs.readFile(path.join(personasDir, file), 'utf-8');
+                    const pObj = JSON.parse(rawP);
+                    if (pObj && pObj.id) {
+                        personasIdMap.set(pObj.id, pObj);
+                        if (pObj.name) personasMap.set(pObj.name.trim().toLowerCase(), pObj);
+                        if (pObj.filename) personasAvatarMap.set(pObj.filename.trim(), pObj);
+                    }
+                } catch (e) { }
+            }
+        }
+    } catch (e) { }
 
     let customTagsRegExps = [];
     try {
@@ -112,6 +134,9 @@ const buildChatsIndex = async () => {
                                         chatDate = `${dd}.${mm}.${yyyy}`;
                                     }
 
+                                    let detectedUserName = null;
+                                    let detectedUserAvatar = null;
+
                                     for (let i = 1; i < lines.length; i++) {
                                         try {
                                             const msgParsed = JSON.parse(lines[i]);
@@ -119,25 +144,59 @@ const buildChatsIndex = async () => {
                                             if (!msgParsed.is_user && !msgParsed.is_system && msgParsed.force_avatar && !botAvatar) {
                                                 botAvatar = msgParsed.force_avatar;
                                             }
+                                            if (msgParsed.is_user) {
+                                                if (!detectedUserName && msgParsed.name && msgParsed.name !== 'USER' && msgParsed.name !== 'User') {
+                                                    detectedUserName = msgParsed.name.trim();
+                                                }
+                                                if (!detectedUserAvatar && msgParsed.force_avatar) {
+                                                    detectedUserAvatar = msgParsed.force_avatar;
+                                                }
+                                            }
                                         } catch (e) { }
                                     }
-                                }
 
-                                chats.push({
-                                    id: `${dirent.name}/${file}`,
-                                    charName: meta.character_name || dirent.name,
-                                    character_id: meta.chat_metadata?.character_id || null,
-                                    name: meta.chat_metadata?.custom_name || file.replace('.jsonl', ''),
-                                    preview: preview,
-                                    isPinned: meta.chat_metadata?.isPinned || false,
-                                    date: chatDate,
-                                    msgs: msgsCount,
-                                    tokens: totalTokens,
-                                    size: (stat.size / 1024).toFixed(1) + 'KB',
-                                    timestamp: chatTimestamp,
-                                    bot_avatar: botAvatar,
-                                    chat_bg: meta.chat_bg || null
-                                });
+                                    let userPersonaId = meta.chat_metadata?.user_persona_id || meta.chat_metadata?.persona_id || null;
+                                    let resolvedUserName = detectedUserName || (meta.chat_metadata?.user_name !== 'USER' ? meta.chat_metadata?.user_name : '') || (meta.user_name !== 'USER' ? meta.user_name : '');
+
+                                    if (!userPersonaId) {
+                                        let matchedPersona = null;
+                                        if (detectedUserName && personasMap.has(detectedUserName.toLowerCase())) {
+                                            matchedPersona = personasMap.get(detectedUserName.toLowerCase());
+                                        } else if (resolvedUserName && personasMap.has(resolvedUserName.toLowerCase())) {
+                                            matchedPersona = personasMap.get(resolvedUserName.toLowerCase());
+                                        } else if (detectedUserAvatar) {
+                                            const cleanAv = decodeURIComponent(detectedUserAvatar.replace(/\\/g, '/').split('/').pop().split('?')[0]);
+                                            if (personasAvatarMap.has(cleanAv)) {
+                                                matchedPersona = personasAvatarMap.get(cleanAv);
+                                            }
+                                        }
+
+                                        if (matchedPersona) {
+                                            userPersonaId = matchedPersona.id;
+                                            resolvedUserName = matchedPersona.name;
+                                        }
+                                    } else if (personasIdMap.has(userPersonaId)) {
+                                        resolvedUserName = personasIdMap.get(userPersonaId).name;
+                                    }
+
+                                    chats.push({
+                                        id: `${dirent.name}/${file}`,
+                                        charName: meta.character_name || dirent.name,
+                                        character_id: meta.chat_metadata?.character_id || null,
+                                        userName: resolvedUserName,
+                                        user_persona_id: userPersonaId,
+                                        name: meta.chat_metadata?.custom_name || file.replace('.jsonl', ''),
+                                        preview: preview,
+                                        isPinned: meta.chat_metadata?.isPinned || false,
+                                        date: chatDate,
+                                        msgs: msgsCount,
+                                        tokens: totalTokens,
+                                        size: (stat.size / 1024).toFixed(1) + 'KB',
+                                        timestamp: chatTimestamp,
+                                        bot_avatar: botAvatar,
+                                        chat_bg: meta.chat_bg || null
+                                    });
+                                }
                             }
                         } catch (e) { }
                     }
@@ -191,10 +250,17 @@ module.exports = async function (fastify, opts) {
                 return msg;
             });
 
+            let resolvedUserName = meta.chat_metadata?.user_name || (meta.user_name !== 'USER' ? meta.user_name : '');
+            if (!resolvedUserName && messages) {
+                const userMsg = messages.find(m => m.is_user && m.name && m.name !== 'USER');
+                if (userMsg) resolvedUserName = userMsg.name;
+            }
+
             return {
                 id: targetPath,
                 name: meta.chat_metadata?.custom_name || path.basename(targetPath, '.jsonl'),
                 character_name: meta.character_name,
+                user_name: resolvedUserName,
                 chat_bg: meta.chat_bg || null,
                 chat_metadata: meta.chat_metadata || {},
                 messages: messages
@@ -207,7 +273,7 @@ module.exports = async function (fastify, opts) {
     fastify.post('/chats', async (req, reply) => {
         const payload = req.body;
         const charName = payload.character_name || 'БЕЗЛИКИЙ ИНСТАНС';
-        const userName = payload.user_name || 'USER';
+        const userName = payload.user_name || payload.chat_metadata?.user_name || '';
 
         let targetFolder = payload.character_id ? `${charName}_${payload.character_id}` : charName;
         targetFolder = targetFolder.replace(/[<>:"/\\|?*]/g, '_');
@@ -229,8 +295,12 @@ module.exports = async function (fastify, opts) {
         const incomingMeta = { ...(payload.chat_metadata || {}) };
         if (isBranch) delete incomingMeta.custom_name;
 
+        if (payload.user_persona_id && !incomingMeta.user_persona_id) {
+            incomingMeta.user_persona_id = payload.user_persona_id;
+        }
+
         const metaLine = JSON.stringify({
-            user_name: userName,
+            user_name: payload.user_name || userName,
             character_name: charName,
             chat_bg: payload.chat_bg || null,
             chat_metadata: {
@@ -271,11 +341,23 @@ module.exports = async function (fastify, opts) {
         const payload = req.body;
 
         try {
+            const incomingMeta = payload.chat_metadata || {};
+            let finalUserName = payload.user_name || incomingMeta.user_name || '';
+
+            if ((!finalUserName || finalUserName === 'USER') && payload.messages) {
+                const userMsg = payload.messages.find(m => m.is_user && m.name && m.name !== 'USER');
+                if (userMsg) finalUserName = userMsg.name;
+            }
+
+            if (finalUserName) {
+                incomingMeta.user_name = finalUserName;
+            }
+
             const metaLine = JSON.stringify({
-                user_name: payload.user_name || "USER",
+                user_name: finalUserName,
                 character_name: payload.character_name,
                 chat_bg: payload.chat_bg || null,
-                chat_metadata: payload.chat_metadata || {}
+                chat_metadata: incomingMeta
             });
             const msgLines = payload.messages?.map(m => JSON.stringify(m)).join('\n') || '';
             await fs.writeFile(filePath, msgLines ? `${metaLine}\n${msgLines}\n` : `${metaLine}\n`, 'utf-8');
@@ -289,7 +371,7 @@ module.exports = async function (fastify, opts) {
     fastify.patch('/chats/meta/*', async (req, reply) => {
         const targetPath = decodeURIComponent(req.params['*']);
         const oldFilePath = path.join(getChatsDir(), targetPath);
-        const { isPinned, custom_name, character_id, character_name, chat_bg } = req.body;
+        const { isPinned, custom_name, character_id, character_name, chat_bg, user_persona_id, user_name } = req.body;
 
         try {
             const content = await fs.readFile(oldFilePath, 'utf-8');
@@ -299,11 +381,49 @@ module.exports = async function (fastify, opts) {
             const meta = JSON.parse(lines[0]);
             if (!meta.chat_metadata) meta.chat_metadata = {};
 
+            const oldCharName = meta.character_name;
+            const oldUserName = meta.user_name || meta.chat_metadata?.user_name;
+
             if (isPinned !== undefined) meta.chat_metadata.isPinned = isPinned;
             if (custom_name !== undefined) meta.chat_metadata.custom_name = custom_name;
             if (character_name !== undefined) meta.character_name = character_name;
+            if (user_name !== undefined) {
+                meta.user_name = user_name;
+                meta.chat_metadata.user_name = user_name;
+            }
+            if (user_persona_id !== undefined) {
+                meta.chat_metadata.user_persona_id = user_persona_id;
+                meta.chat_metadata.persona_id = user_persona_id;
+            }
 
             if (chat_bg !== undefined) meta.chat_bg = chat_bg;
+
+            // КАСТОМНАЯ ХИРУРГИЯ: Глубокая замена имени во всех репликах лога
+            if (character_name && character_name !== oldCharName) {
+                for (let i = 1; i < lines.length; i++) {
+                    if (!lines[i].trim()) continue;
+                    try {
+                        const m = JSON.parse(lines[i]);
+                        if (!m.is_user && !m.is_system) {
+                            m.name = character_name;
+                            lines[i] = JSON.stringify(m);
+                        }
+                    } catch (e) { }
+                }
+            }
+
+            if (user_name && user_name !== oldUserName) {
+                for (let i = 1; i < lines.length; i++) {
+                    if (!lines[i].trim()) continue;
+                    try {
+                        const m = JSON.parse(lines[i]);
+                        if (m.is_user) {
+                            m.name = user_name;
+                            lines[i] = JSON.stringify(m);
+                        }
+                    } catch (e) { }
+                }
+            }
 
             let needsMove = false;
             let newRelativePath = targetPath;

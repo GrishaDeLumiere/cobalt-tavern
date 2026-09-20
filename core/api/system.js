@@ -30,6 +30,7 @@ module.exports = async function (fastify, opts) {
     const settingsPath = path.join(userDir, 'settings.json');
     const presetsPath = path.join(userDir, 'theme_presets.json');
     const regexPath = path.join(userDir, 'regex_rules.json');
+    const tagsPath = path.join(userDir, 'tags_metadata.json');
     const fontsDir = path.join(userDir, 'fonts');
     const avatarDir = path.join(userDir, 'user_profile');
 
@@ -37,6 +38,7 @@ module.exports = async function (fastify, opts) {
     let settingsCache = null;
     let themePresetsCache = null;
     let regexRulesCache = null;
+    let tagsCache = null;
 
     const ensureUserDirs = async () => {
         try { await fs.access(userDir); } catch { await fs.mkdir(userDir, { recursive: true }); }
@@ -153,6 +155,33 @@ module.exports = async function (fastify, opts) {
         } catch (err) {
             fastify.log.error('Ошибка записи regex_rules.json:', err);
             return reply.code(500).send({ error: 'Failed to save regex rules' });
+        }
+    });
+
+    // === ИЗОЛИРОВАННАЯ ТАКСОНОМИЯ ТЕГОВ (tags_metadata.json) ===
+    fastify.get('/system/tags', async (request, reply) => {
+        if (tagsCache) return tagsCache;
+        await ensureUserDirs();
+        try {
+            const data = await fs.readFile(tagsPath, 'utf-8');
+            tagsCache = JSON.parse(data);
+            return tagsCache;
+        } catch (err) {
+            tagsCache = {};
+            return {};
+        }
+    });
+
+    fastify.post('/system/tags', async (request, reply) => {
+        await ensureUserDirs();
+        try {
+            const tags = request.body || {};
+            tagsCache = tags;
+            await fs.writeFile(tagsPath, JSON.stringify(tags, null, 4), 'utf-8');
+            return { success: true };
+        } catch (err) {
+            fastify.log.error('Ошибка записи tags_metadata.json:', err);
+            return reply.code(500).send({ error: 'Failed to save tags metadata' });
         }
     });
 

@@ -21,7 +21,7 @@ module.exports = async function (fastify, opts) {
             if (file.endsWith('.json')) {
                 try {
                     const data = JSON.parse(await fs.readFile(path.join(loreDir, file), 'utf-8'));
-                    books.push({ id: data.id, name: data.name });
+                    books.push({ id: data.id, name: data.name, color: data.color || '' });
                 } catch (e) {
                     fastify.log.error(`[LOREBOOKS] Ошибка чтения ${file}: ${e.message}`);
                 }
