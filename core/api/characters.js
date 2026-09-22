@@ -5,51 +5,100 @@ const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
 
 module.exports = async function (fastify, opts) {
     const avatarsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters');
-    const dbFile = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_db.json');
+    const charsDataDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_data');
+    const orderFile = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_order.json');
+    const oldDbFile = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_db.json');
 
-    // Кэш в ОЗУ для мгновенного ответа
     let charactersCache = null;
 
-    // Безопасное имя файла (защита от Path Traversal ../)
     const sanitizeFilename = (name) => {
         if (!name) return '';
         return path.basename(String(name).trim()).replace(/[<>:"/\\|?*]/g, '_');
     };
 
-    const ensureDB = async () => {
+    const ensureFoldersAndMigrate = async () => {
         try { await fs.access(avatarsDir); } catch { await fs.mkdir(avatarsDir, { recursive: true }); }
+        try { await fs.access(charsDataDir); } catch { await fs.mkdir(charsDataDir, { recursive: true }); }
+
         try {
-            await fs.access(dbFile);
-        } catch {
-            await fs.writeFile(dbFile, JSON.stringify({ characters: [] }, null, 4), 'utf8');
-        }
+            await fs.access(oldDbFile);
+            const data = await fs.readFile(oldDbFile, 'utf8');
+            const parsed = JSON.parse(data).characters || [];
+
+            if (parsed.length > 0) {
+                console.log(`[CHARACTERS] Найдена старая база characters_db.json (${parsed.length} персов). Разрезаем на модули...`);
+                let order = [];
+                for (const c of parsed) {
+                    const cleanId = c.id || `char_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+                    c.id = cleanId;
+                    await fs.writeFile(path.join(charsDataDir, `${cleanId}.json`), JSON.stringify(c, null, 4), 'utf8');
+                    order.push(cleanId);
+                }
+                await fs.writeFile(orderFile, JSON.stringify(order, null, 4), 'utf8');
+                console.log(`[CHARACTERS] Успешно создано ${parsed.length} индивидуальных файлов!`);
+            }
+            await fs.rename(oldDbFile, path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_db.backup.json'));
+        } catch (e) { }
     };
 
     const getCharactersData = async () => {
         if (charactersCache) return charactersCache;
+        await ensureFoldersAndMigrate();
 
-        await ensureDB();
+        let order = [];
         try {
-            const data = await fs.readFile(dbFile, 'utf8');
-            charactersCache = JSON.parse(data).characters || [];
-            return charactersCache;
+            const orderData = await fs.readFile(orderFile, 'utf8');
+            order = JSON.parse(orderData);
         } catch (e) {
-            console.error('[CHARACTERS DB] Сбой чтения базы:', e);
-            charactersCache = [];
-            return [];
+            order = [];
         }
-    };
 
-    const saveCharactersData = async (charsArray) => {
-        charactersCache = charsArray;
-        await fs.writeFile(dbFile, JSON.stringify({ characters: charsArray }, null, 4), 'utf8');
+        let files = [];
+        try {
+            files = await fs.readdir(charsDataDir);
+        } catch (e) {
+            files = [];
+        }
+
+        const loadedChars = [];
+        let needsOrderSave = false;
+
+        for (const file of files) {
+            if (!file.endsWith('.json')) continue;
+            try {
+                const raw = await fs.readFile(path.join(charsDataDir, file), 'utf8');
+                const c = JSON.parse(raw);
+                if (c && c.id) {
+                    loadedChars.push(c);
+                    if (!order.includes(c.id)) {
+                        order.push(c.id);
+                        needsOrderSave = true;
+                    }
+                }
+            } catch (err) {
+                console.error(`[CHARACTERS] Ошибка парсинга файла ${file}:`, err.message);
+            }
+        }
+
+        const orderMap = new Map(order.map((id, index) => [id, index]));
+        loadedChars.sort((a, b) => {
+            const posA = orderMap.has(a.id) ? orderMap.get(a.id) : 99999;
+            const posB = orderMap.has(b.id) ? orderMap.get(b.id) : 99999;
+            return posA - posB;
+        });
+
+        if (needsOrderSave) {
+            await fs.writeFile(orderFile, JSON.stringify(loadedChars.map(c => c.id), null, 4), 'utf8');
+        }
+
+        charactersCache = loadedChars;
+        return charactersCache;
     };
 
     // ==========================================
     // ЭНДПОИНТЫ
     // ==========================================
 
-    // Быстрая асинхронная отдача списка (без блокирующего existsSync)
     fastify.get('/characters', async () => {
         const chars = await getCharactersData();
 
@@ -73,18 +122,26 @@ module.exports = async function (fastify, opts) {
 
     fastify.post('/characters/sync', async (request) => {
         const charData = request.body;
-        if (!charData || !charData.id) return { success: false };
+        if (!charData || !charData.id) return { success: false, error: 'No ID' };
 
+        await ensureFoldersAndMigrate();
         const chars = await getCharactersData();
-        const idx = chars.findIndex(c => c.id === charData.id);
+        const existingIdx = chars.findIndex(c => c.id === charData.id);
 
-        if (idx > -1) {
-            chars[idx] = { ...chars[idx], ...charData };
+        let finalObj = {};
+        if (existingIdx > -1) {
+            finalObj = { ...chars[existingIdx], ...charData };
+            chars[existingIdx] = finalObj;
         } else {
-            chars.push(charData);
+            finalObj = charData;
+            chars.unshift(finalObj);
+            await fs.writeFile(orderFile, JSON.stringify(chars.map(c => c.id), null, 4), 'utf8');
         }
 
-        await saveCharactersData(chars);
+        const targetFilePath = path.join(charsDataDir, `${finalObj.id}.json`);
+        await fs.writeFile(targetFilePath, JSON.stringify(finalObj, null, 4), 'utf8');
+
+        charactersCache = chars;
         return { success: true };
     });
 
@@ -93,17 +150,15 @@ module.exports = async function (fastify, opts) {
         if (!order || !Array.isArray(order)) return { success: false };
 
         const chars = await getCharactersData();
-
-        // Быстрая карта сортировки O(1)
         const orderMap = new Map(order.map((id, index) => [id, index]));
-
         chars.sort((a, b) => {
-            const posA = orderMap.has(a.id) ? orderMap.get(a.id) : 999;
-            const posB = orderMap.has(b.id) ? orderMap.get(b.id) : 999;
+            const posA = orderMap.has(a.id) ? orderMap.get(a.id) : 99999;
+            const posB = orderMap.has(b.id) ? orderMap.get(b.id) : 99999;
             return posA - posB;
         });
 
-        await saveCharactersData(chars);
+        await fs.writeFile(orderFile, JSON.stringify(order, null, 4), 'utf8');
+        charactersCache = chars;
         return { success: true };
     });
 
@@ -111,31 +166,41 @@ module.exports = async function (fastify, opts) {
         const { importedData } = request.body;
         if (!importedData || !Array.isArray(importedData)) return { success: false };
 
-        const chars = await getCharactersData();
-        const idMap = new Map(chars.map((c, idx) => [c.id, idx]));
+        await ensureFoldersAndMigrate();
+        const current = await getCharactersData();
+        const idMap = new Map(current.map((c, idx) => [c.id, idx]));
+        let isOrderChanged = false;
 
-        importedData.forEach(newItem => {
-            if (newItem.id && idMap.has(newItem.id)) {
+        for (const newItem of importedData) {
+            if (!newItem || !newItem.id) continue;
+            let targetObj = newItem;
+            if (idMap.has(newItem.id)) {
                 const idx = idMap.get(newItem.id);
-                chars[idx] = { ...chars[idx], ...newItem };
+                targetObj = { ...current[idx], ...newItem };
+                current[idx] = targetObj;
             } else {
-                chars.push(newItem);
+                current.unshift(targetObj);
+                isOrderChanged = true;
             }
-        });
+            await fs.writeFile(path.join(charsDataDir, `${targetObj.id}.json`), JSON.stringify(targetObj, null, 4), 'utf8');
+        }
 
-        await saveCharactersData(chars);
+        if (isOrderChanged) {
+            await fs.writeFile(orderFile, JSON.stringify(current.map(c => c.id), null, 4), 'utf8');
+        }
+
+        charactersCache = current;
         return { success: true };
     });
 
     fastify.post('/characters/avatar', async (request, reply) => {
-        await ensureDB();
+        await ensureFoldersAndMigrate();
 
         const data = await request.file();
         if (!data) {
             return reply.code(400).send({ success: false, error: 'Файл не передан' });
         }
 
-        // Безопасное извлечение имени
         let requestFilename = data.fields?.filename?.value || data.filename || '';
         requestFilename = sanitizeFilename(requestFilename);
 
@@ -158,18 +223,19 @@ module.exports = async function (fastify, opts) {
         const chars = await getCharactersData();
         const target = chars.find(c => c.id === targetId);
 
-        if (target && target.filename) {
-            // Удаляем файл ТОЛЬКО если он не используется другими персонажами
-            const isAvatarShared = chars.some(c => c.id !== targetId && c.filename === target.filename);
-            if (!isAvatarShared) {
-                try {
-                    await fs.unlink(path.join(avatarsDir, target.filename));
-                } catch (e) { }
+        if (target) {
+            if (target.filename) {
+                const isAvatarShared = chars.some(c => c.id !== targetId && c.filename === target.filename);
+                if (!isAvatarShared) {
+                    try { await fs.unlink(path.join(avatarsDir, target.filename)); } catch (e) { }
+                }
             }
+            try { await fs.unlink(path.join(charsDataDir, `${targetId}.json`)); } catch (e) { }
         }
 
         const filtered = chars.filter(c => c.id !== targetId);
-        await saveCharactersData(filtered);
+        await fs.writeFile(orderFile, JSON.stringify(filtered.map(c => c.id), null, 4), 'utf8');
+        charactersCache = filtered;
         return { success: true };
     });
 

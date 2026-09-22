@@ -102,7 +102,7 @@ const buildPrompt = async (payload) => {
 
     const chatsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'chats');
     const presetsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'ai_presets');
-    const charsDbPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_db.json');
+    const charsDataDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_data');
     const personasDbPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'personas_db.json');
 
     // 1. Читаем всё с диска (теперь вытаскиваем метадату чата!)
@@ -127,16 +127,29 @@ const buildPrompt = async (payload) => {
     let character = null;
     try {
         const finalCharId = charId || chat.chat_metadata?.character_id;
-        const charsDb = JSON.parse(await fs.readFile(charsDbPath, 'utf-8'));
 
         if (finalCharId) {
-            character = charsDb.characters.find(c => c.id === finalCharId);
+            try {
+                const charRaw = await fs.readFile(path.join(charsDataDir, `${finalCharId}.json`), 'utf-8');
+                character = JSON.parse(charRaw);
+            } catch (err) { }
         }
 
         if (!character && chat.character_name) {
-            character = charsDb.characters.find(c =>
-                (c.name || '').toLowerCase() === chat.character_name.toLowerCase()
-            );
+            try {
+                const files = await fs.readdir(charsDataDir);
+                for (const f of files) {
+                    if (!f.endsWith('.json')) continue;
+                    try {
+                        const raw = await fs.readFile(path.join(charsDataDir, f), 'utf-8');
+                        const c = JSON.parse(raw);
+                        if (c.name && c.name.toLowerCase() === chat.character_name.toLowerCase()) {
+                            character = c;
+                            break;
+                        }
+                    } catch (e) { }
+                }
+            } catch (e) { }
         }
     } catch (e) { console.error('[BUILDER] Сбой чтения базы персонажей'); }
 

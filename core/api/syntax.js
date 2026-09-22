@@ -8,7 +8,7 @@ module.exports = async function (fastify, opts) {
     fastify.post('/syntax/simulate', async (request, reply) => {
         const { textNodes, charId, personaId } = request.body;
 
-        const charsDbPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_db.json');
+        const charsDataDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_data');
         const personasDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'personas');
         const personasDbPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'personas_db.json');
 
@@ -17,10 +17,10 @@ module.exports = async function (fastify, opts) {
 
         if (charId) {
             try {
-                const charsDb = JSON.parse(await fs.readFile(charsDbPath, 'utf-8'));
-                character = (charsDb.characters || []).find(c => c.id === charId) || {};
+                const charPath = path.join(charsDataDir, `${charId}.json`);
+                character = JSON.parse(await fs.readFile(charPath, 'utf-8'));
             } catch (e) {
-                console.error('[SYNTAX SIMULATOR] Ошибка чтения персонажей:', e.message);
+                console.error('[SYNTAX SIMULATOR] Ошибка чтения персонажа:', e.message);
             }
         }
 

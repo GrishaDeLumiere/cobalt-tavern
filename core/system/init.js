@@ -9,6 +9,7 @@ const DEFAULT_USER = 'default-user';
 
 const USER_DIRS = [
     'characters',
+    'characters_data',
     'chats',
     'backgrounds',
     'lorebooks',
@@ -274,14 +275,33 @@ async function initializeFilesystem() {
             await fs.writeFile(path.join(personasDir, `${p.id}.json`), JSON.stringify(p, null, 4), 'utf-8');
             order.push(p.id);
         }
-        await fs.writeFile(personasOrderPath, JSON.stringify(order), 'utf-8');
+        await fs.writeFile(personasOrderPath, JSON.stringify(order, null, 4), 'utf-8');
 
-        // Бэкапим старый файл, чтобы он больше не мешал
         await fs.rename(oldPersonasDbPath, path.join(userDirPath, 'personas_db.backup.json'));
         console.log('[SYS_MIGRATION] Миграция персон успешно завершена! Архитектура разделена на модули.');
-    } catch (e) {
-        // Если файла нет, значит база уже разделена или чистая, игнорим
-    }
+    } catch (e) { }
+
+    // 8. МИГРАЦИЯ ПЕРСОНАЖЕЙ (Разделение монолита characters_db.json на модули)
+    const oldCharsDbPath = path.join(userDirPath, 'characters_db.json');
+    const charsDataDir = path.join(userDirPath, 'characters_data');
+    const charsOrderPath = path.join(userDirPath, 'characters_order.json');
+    try {
+        await fs.access(oldCharsDbPath);
+        const rawOldChars = await fs.readFile(oldCharsDbPath, 'utf-8');
+        const parsedOldChars = JSON.parse(rawOldChars).characters || [];
+
+        console.log(`[SYS_MIGRATION] ОБНАРУЖЕН МОНОЛИТ ПЕРСОНАЖЕЙ! Начинаю разрезку ${parsedOldChars.length} карточек...`);
+        let charOrder = [];
+        for (const c of parsedOldChars) {
+            if (!c.id) c.id = `char_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            await fs.writeFile(path.join(charsDataDir, `${c.id}.json`), JSON.stringify(c, null, 4), 'utf-8');
+            charOrder.push(c.id);
+        }
+        await fs.writeFile(charsOrderPath, JSON.stringify(charOrder, null, 4), 'utf-8');
+
+        await fs.rename(oldCharsDbPath, path.join(userDirPath, 'characters_db.backup.json'));
+        console.log('[SYS_MIGRATION] Миграция персонажей успешно завершена! База децентрализована.');
+    } catch (e) { }
 
     console.log('[SYS_INIT] Файловая система готова к работе. Aegis Shield: ON\n');
 }
