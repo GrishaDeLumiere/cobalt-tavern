@@ -46,8 +46,7 @@
 | Goal | Status | Milestone Description |
 | :---: | :---: | :--- |
 | **⭐ 100 Stars** | 🔓 *In Progress* | **UNLOCKED REPO.** Full source code release of the ecosystem (SolidJS UI + Fastify Backend) to the public. |
-| **⭐ 200 Stars** | 🔌 *Locked* | **MODDING API & SDK.** Release of plugin architecture, inference lifecycle hooks, and third-party extension SDK. |
-| **⭐ 500 Stars** | 🚀 *Classified* | Deployment of the decentralized tactical arena and combat hub... |
+| **⭐ 200 Stars** | 🚀 *Classified* | Deployment of the decentralized tactical arena and combat hub... |
 
 </div>
 
