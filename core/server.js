@@ -45,9 +45,12 @@ const appConfig = loadOrCreateConfig();
 const PORT = Number(process.env.PORT) || Number(appConfig.port) || 8080;
 const HOST = process.env.HOST || appConfig.host || '0.0.0.0';
 
-// Тестовый эндпоинт для проверки связи
-fastify.get('/ping', async (request, reply) => {
-    return { status: 'Cobalt Core Online', system: 'Aegis Active', fps_drop: false };
+// === GATEWAY PULSE & HEARTBEAT ===
+fastify.get('/api/ping', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    reply.header('Pragma', 'no-cache');
+    reply.header('Expires', '0');
+    return { status: 'ok', timestamp: Date.now(), core: 'Cobalt Online' };
 });
 
 // === ФУНКЦИЯ ХОЛОДНОГО СТАРТА ЯДРА ===

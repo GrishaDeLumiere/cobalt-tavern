@@ -4,7 +4,6 @@ const path = require('path');
 const axios = require('axios');
 const AdmZip = require('adm-zip');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
 
 const CURRENT_VERSION = require(path.join(__dirname, '../package.json')).version;
 const REPO_ZIP_URL = 'https://github.com/GrishaDeLumiere/cobalt-tavern/archive/refs/heads/main.zip';
@@ -63,19 +62,11 @@ async function syncDirectories(source, target) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// === ФУНКЦИЯ АВТОМАТИЧЕСКОГО РЕСТАРТА СЕРВЕРА ===
-function respawnSelf() {
-    console.log('\n[UPDATER] Развертывание нового инстанса Ядра...');
-
-    // Запускаем новый процесс Node с теми же аргументами
-    const child = spawn(process.argv[0], process.argv.slice(1), {
-        cwd: process.cwd(),
-        detached: true,
-        stdio: 'inherit'
-    });
-
-    child.unref(); // Отвязываем новый процесс от текущего
-    process.exit(0); // Завершаем старый процесс (освобождает порт 8000)
+// === ЧИСТОЕ ЗАВЕРШЕНИЕ РАБОТЫ (ДЛЯ РУЧНОГО ЗАПУСКА) ===
+function shutdownSelf() {
+    console.log('\n[UPDATER] Файлы обновлены.');
+    console.log('[UPDATER] Сервер завершает работу. Запустите его через .bat файл в папке проекта или привычным для вас способом.\n');
+    process.exit(0);
 }
 
 async function runUpdateStream(res) {
@@ -121,15 +112,15 @@ async function runUpdateStream(res) {
         fs.rmSync(TEMP_DIR, { recursive: true, force: true });
 
         await sleep(400);
-        sendLog('ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Инициализация перезапуска...', 'success');
+        sendLog('ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Сервер выключается. Запустите его через .bat файл или как вы привыкли запускать.', 'success');
 
         // Отправляем сигнал клиенту
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
 
-        // Даем 1.5 секунды на закрытие сокетов и перезапускаем сервер
+        // Даем время на закрытие сокетов и завершаем процесс
         setTimeout(() => {
-            respawnSelf();
+            shutdownSelf();
         }, 1500);
 
     } catch (err) {

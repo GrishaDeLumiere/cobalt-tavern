@@ -3,6 +3,7 @@ const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
 const { pipeline } = require('stream/promises');
+const sharp = require('sharp');
 const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
 
 const defaultManifest = {
@@ -12,6 +13,7 @@ const defaultManifest = {
 
 module.exports = async function (fastify, opts) {
     const bgDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'backgrounds');
+    const thumbDir = path.join(bgDir, 'thumbnails');
     const manifestPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'backgrounds.json');
 
     // Кэш манифеста в оперативной памяти
@@ -19,6 +21,7 @@ module.exports = async function (fastify, opts) {
 
     const ensureStorage = async () => {
         try { await fs.access(bgDir); } catch { await fs.mkdir(bgDir, { recursive: true }); }
+        try { await fs.access(thumbDir); } catch { await fs.mkdir(thumbDir, { recursive: true }); }
         try {
             await fs.access(manifestPath);
         } catch {
@@ -42,6 +45,38 @@ module.exports = async function (fastify, opts) {
     // === GET: Получить всю базу фонов (Мгновенно из памяти) ===
     fastify.get('/backgrounds/manifest', async (request, reply) => {
         return await getManifest();
+    });
+
+    // === GET: AAA Thumbnail Streaming (360px WebP превью с кэшем на диске) ===
+    fastify.get('/backgrounds/thumb/:filename', async (request, reply) => {
+        const cleanName = path.basename(request.params.filename || '');
+        if (!cleanName) return reply.code(400).send({ error: 'Filename missing' });
+
+        const originalPath = path.join(bgDir, cleanName);
+        const thumbName = `thumb_${path.parse(cleanName).name}.webp`;
+        const cachedThumbPath = path.join(thumbDir, thumbName);
+
+        reply.header('Cache-Control', 'public, max-age=2592000, immutable');
+
+        try {
+            await fs.access(cachedThumbPath);
+            reply.type('image/webp');
+            return reply.send(fsSync.createReadStream(cachedThumbPath));
+        } catch (_) { }
+
+        try {
+            await fs.access(originalPath);
+
+            await sharp(originalPath)
+                .resize({ width: 360, withoutEnlargement: true })
+                .webp({ quality: 75, effort: 2 })
+                .toFile(cachedThumbPath);
+
+            reply.type('image/webp');
+            return reply.send(fsSync.createReadStream(cachedThumbPath));
+        } catch (err) {
+            return reply.code(404).send({ error: 'File not found' });
+        }
     });
 
     // === POST: Сохранить новое состояние (Drag&Drop, Переименование) ===
@@ -77,11 +112,19 @@ module.exports = async function (fastify, opts) {
             // Асинхронный пайплайн стрима прямо на диск
             await pipeline(part.file, fsSync.createWriteStream(savePath));
 
+            const thumbName = `thumb_${bgId}.webp`;
+            const cachedThumbPath = path.join(thumbDir, thumbName);
+            await sharp(savePath)
+                .resize({ width: 360, withoutEnlargement: true })
+                .webp({ quality: 75, effort: 2 })
+                .toFile(cachedThumbPath);
+
             uploadedFiles.push({
                 id: bgId,
                 name: path.basename(part.filename || 'Background'),
                 filename: safeName,
                 url: `/data/${DEFAULT_USER}/backgrounds/${safeName}`,
+                thumbUrl: `/api/backgrounds/thumb/${safeName}`,
                 active: false,
                 folderId: null,
                 color: '#1a1a24'
@@ -99,6 +142,9 @@ module.exports = async function (fastify, opts) {
 
             const targetFile = path.join(bgDir, cleanName);
             await fs.unlink(targetFile);
+
+            const thumbName = `thumb_${path.parse(cleanName).name}.webp`;
+            try { await fs.unlink(path.join(thumbDir, thumbName)); } catch (_) {}
 
             // Синхронизируем кэш в памяти если файл был в манифесте
             if (manifestCache && Array.isArray(manifestCache.backgrounds)) {

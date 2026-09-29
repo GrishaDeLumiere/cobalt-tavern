@@ -6,7 +6,7 @@ const { pipeline } = require('stream/promises');
 const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
 
 const defaultSettings = {
-    userName: 'USER',
+    userName: 'User',
     theme: {
         bgDim: 85,
         bgBloom: 10,
