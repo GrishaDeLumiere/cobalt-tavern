@@ -445,11 +445,31 @@ module.exports = async function (fastify, opts) {
                         }
                     }
 
-                    // Смена личности игрока
-                    if (user_name && m.is_user) {
-                        if (m.name !== user_name) {
+                    if (m.is_user) {
+                        if (user_name && m.name !== user_name) {
                             m.name = user_name;
                             altered = true;
+                        }
+                        if (user_persona_id !== undefined) {
+                            if (!m.extra) m.extra = {};
+                            const currentId = m.extra.persona_id ?? null;
+                            const targetId = user_persona_id || null;
+                            if (currentId !== targetId) {
+                                if (targetId) {
+                                    m.extra.persona_id = targetId;
+                                } else {
+                                    delete m.extra.persona_id;
+                                }
+                                altered = true;
+                            }
+                            if (m.persona_id !== undefined) {
+                                if (targetId) {
+                                    m.persona_id = targetId;
+                                } else {
+                                    delete m.persona_id;
+                                }
+                                altered = true;
+                            }
                         }
                     }
 
