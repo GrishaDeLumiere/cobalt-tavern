@@ -9,11 +9,13 @@ const { scanLorebooks } = require('./loreEngine');
 const applyPostProcessing = (messages, mode) => {
     if (!messages || messages.length === 0) return [];
 
-    // ШАГ 0: Вычищаем призрачные (пустые) сообщения!
-    const validMessages = messages.filter(msg =>
-        (msg.content && String(msg.content).trim() !== '') ||
-        (msg.images && msg.images.length > 0)
-    );
+    // ШАГ 0: Вычищаем призрачные (пустые) сообщения и служебную глубину перед отправкой в API
+    const validMessages = messages
+        .filter(msg =>
+            (msg.content && String(msg.content).trim() !== '') ||
+            (msg.images && msg.images.length > 0)
+        )
+        .map(({ depth, ...rest }) => rest);
 
     if (mode === 'none' || !mode) return validMessages;
 
@@ -359,7 +361,13 @@ const buildPrompt = async (payload) => {
                         // А) СНАЧАЛА пушим сообщение чата этой глубины (если есть)
                         const chatMsg = historyMsgs.find(m => m.depth === currentDepth);
                         if (chatMsg) {
-                            finalHistoryMsgs.push({ role: chatMsg.role, content: chatMsg.content, name: chatMsg.name, images: chatMsg.images });
+                            finalHistoryMsgs.push({ 
+                                depth: chatMsg.depth, 
+                                role: chatMsg.role, 
+                                content: chatMsg.content, 
+                                name: chatMsg.name, 
+                                images: chatMsg.images 
+                            });
                         }
 
                         // Б) ПОТОМ пушим инжекты (сортируя их между собой по ордеру и роли)
@@ -386,7 +394,11 @@ const buildPrompt = async (payload) => {
                                         charName, userName, chat, character, persona, sysConfig, variables: sharedVariables
                                     });
                                     if (resolvedDContent.trim() !== '') {
-                                        finalHistoryMsgs.push({ role: (dNode.role || 'System').toLowerCase(), content: resolvedDContent });
+                                        finalHistoryMsgs.push({ 
+                                            depth: currentDepth, 
+                                            role: (dNode.role || 'System').toLowerCase(), 
+                                            content: resolvedDContent 
+                                        });
                                     }
                                 }
                             }
@@ -439,8 +451,26 @@ const buildPrompt = async (payload) => {
         rawPayload.forEach(m => {
             if (!m.content) return;
             outgoingRules.forEach(r => {
+                const hasDepthLimit = (r.minDepth !== null && r.minDepth !== undefined && r.minDepth !== '') ||
+                    (r.maxDepth !== null && r.maxDepth !== undefined && r.maxDepth !== '');
+
+                if (hasDepthLimit) {
+                    if (m.depth === undefined || m.depth === null) return;
+                    const min = (r.minDepth !== null && r.minDepth !== undefined && r.minDepth !== '') ? Number(r.minDepth) : null;
+                    const max = (r.maxDepth !== null && r.maxDepth !== undefined && r.maxDepth !== '') ? Number(r.maxDepth) : null;
+                    if (min !== null && !isNaN(min) && m.depth < min) return;
+                    if (max !== null && !isNaN(max) && m.depth > max) return;
+                }
+
                 try {
-                    const reg = new RegExp(r.pattern, r.flags || 'g');
+                    let pattern = r.pattern;
+                    let flags = r.flags || 'g';
+                    const slashMatch = pattern.match(/^\/(.+)\/([a-z]*)$/i);
+                    if (slashMatch) {
+                        pattern = slashMatch[1];
+                        flags = slashMatch[2] || flags;
+                    }
+                    const reg = new RegExp(pattern, flags);
                     m.content = m.content.replace(reg, (r.replacement || '').replace(/\\n/g, '\n'));
                 } catch (e) { }
             });
