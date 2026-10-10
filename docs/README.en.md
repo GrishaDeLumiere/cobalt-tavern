@@ -1,15 +1,15 @@
 <div align="right">
-  <a href="README.md">🇷🇺 Русский</a> | <strong>🇬🇧 English</strong>
+  <a href="./../README.md">🇷🇺 Русский</a> | <strong>🇬🇧 English</strong>
 </div>
 
 <a name="readme-top"></a>
 
 <div align="center">
 
-# <img src="./core-ui/favicon.svg" alt="Cobalt Tavern Logo" width="36" height="36" style="vertical-align: middle;" /> Cobalt Tavern
+# <img src="./../core-ui/favicon.svg" alt="Cobalt Tavern Logo" width="36" height="36" style="vertical-align: middle;" /> Cobalt Tavern
 
 <p align="center">
-  <img src="./core-ui/favicon.svg" alt="Cobalt Tavern Logo" width="115" height="115" />
+  <img src="./../core-ui/favicon.svg" alt="Cobalt Tavern Logo" width="115" height="115" />
 </p>
 
 ### Autonomous Workstation, Deterministic LLM Inference Engine & Operating Environment for Text Roleplay
@@ -55,24 +55,24 @@
 ## 📸 Interface Gallery
 
 <p align="center">
-  <img width="49%" src="./core-ui/screen1.jpg" alt="Cobalt Tavern Workspace">
+  <img width="49%" src="./../docs/screen1.jpg" alt="Cobalt Tavern Workspace">
   &nbsp;
-  <img width="49%" src="./core-ui/screen2.jpg" alt="Prompt Matrix Visualizer">
+  <img width="49%" src="./../docs/screen2.jpg" alt="Prompt Matrix Visualizer">
 </p>
 <p align="center">
-  <img width="49%" src="./core-ui/screen3.jpg" alt="Lore Engine Config">
+  <img width="49%" src="./../docs/screen3.jpg" alt="Lore Engine Config">
   &nbsp;
-  <img width="49%" src="./core-ui/screen4.jpg" alt="Chat Manager & Inspector">
+  <img width="49%" src="./../docs/screen4.jpg" alt="Chat Manager & Inspector">
 </p>
 <p align="center">
-  <img width="49%" src="./core-ui/screen5.jpg" alt="AI Presets & Samplers">
+  <img width="49%" src="./../docs/screen5.jpg" alt="AI Presets & Samplers">
   &nbsp;
-  <img width="49%" src="./core-ui/screen6.jpg" alt="Themes & Customization">
+  <img width="49%" src="./../docs/screen6.jpg" alt="Themes & Customization">
 </p>
 <p align="center">
-  <img width="49%" src="./core-ui/screen7.jpg" alt="AI Presets & Samplers">
+  <img width="49%" src="./../docs/screen7.jpg" alt="AI Presets & Samplers">
   &nbsp;
-  <img width="49%" src="./core-ui/screen8.jpg" alt="Themes & Customization">
+  <img width="49%" src="./../docs/screen8.jpg" alt="Themes & Customization">
 </p>
 
 ---
@@ -331,7 +331,7 @@ This software is distributed under a proprietary license: **Copyright (c) 2026 G
 * Forking for public re-distribution, packaging, or re-branding is strictly prohibited.
 * Commercial extraction or integration of engine components into cloud services is strictly forbidden.
 
-Refer to the full terms in the [LICENSE](LICENSE) file.
+Refer to the full terms in the [LICENSE](./../LICENSE) file.
 
 ---
 

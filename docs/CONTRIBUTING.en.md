@@ -1,5 +1,5 @@
 <div align="right">
- <a href="CONTRIBUTING.md">🇷🇺 Русский</a> | <strong>🇬🇧 English</strong>
+ <a href="./../CONTRIBUTING.md">🇷🇺 Русский</a> | <strong>🇬🇧 English</strong>
 </div>
 
 # 🛠️ CONTRIBUTING GUIDELINES

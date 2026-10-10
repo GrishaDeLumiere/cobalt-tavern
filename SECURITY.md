@@ -1,5 +1,5 @@
 <div align="right">
- <strong>🇷🇺 Русский</strong> | <a href="SECURITY.en.md">🇬🇧 English</a>
+ <strong>🇷🇺 Русский</strong> | <a href="./docs/SECURITY.en.md">🇬🇧 English</a>
 </div>
 
 # 🛡️ ПОЛИТИКА БЕЗОПАСНОСТИ

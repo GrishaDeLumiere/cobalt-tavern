@@ -1,5 +1,5 @@
 <div align="right">
-  <strong>🇷🇺 Русский</strong> | <a href="README.en.md">🇬🇧 English</a>
+  <strong>🇷🇺 Русский</strong> | <a href="./docs/README.en.md">🇬🇧 English</a>
 </div>
 
 <a name="readme-top"></a>
@@ -55,24 +55,24 @@
 ## 📸 Галерея интерфейса
 
 <p align="center">
-  <img width="49%" src="./core-ui/screen1.jpg" alt="Cobalt Tavern Workspace">
+  <img width="49%" src="./docs/screen1.jpg" alt="Cobalt Tavern Workspace">
   &nbsp;
-  <img width="49%" src="./core-ui/screen2.jpg" alt="Prompt Matrix Visualizer">
+  <img width="49%" src="./docs/screen2.jpg" alt="Prompt Matrix Visualizer">
 </p>
 <p align="center">
-  <img width="49%" src="./core-ui/screen3.jpg" alt="Lore Engine Config">
+  <img width="49%" src="./docs/screen3.jpg" alt="Lore Engine Config">
   &nbsp;
-  <img width="49%" src="./core-ui/screen4.jpg" alt="Chat Manager & Inspector">
+  <img width="49%" src="./docs/screen4.jpg" alt="Chat Manager & Inspector">
 </p>
 <p align="center">
-  <img width="49%" src="./core-ui/screen5.jpg" alt="AI Presets & Samplers">
+  <img width="49%" src="./docs/screen5.jpg" alt="AI Presets & Samplers">
   &nbsp;
-  <img width="49%" src="./core-ui/screen6.jpg" alt="Themes & Customization">
+  <img width="49%" src="./docs/screen6.jpg" alt="Themes & Customization">
 </p>
 <p align="center">
-  <img width="49%" src="./core-ui/screen7.jpg" alt="AI Presets & Samplers">
+  <img width="49%" src="./docs/screen7.jpg" alt="AI Presets & Samplers">
   &nbsp;
-  <img width="49%" src="./core-ui/screen8.jpg" alt="Themes & Customization">
+  <img width="49%" src="./docs/screen8.jpg" alt="Themes & Customization">
 </p>
 
 ---
