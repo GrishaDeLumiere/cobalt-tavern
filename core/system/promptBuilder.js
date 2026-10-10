@@ -4,6 +4,7 @@ const path = require('path');
 const { ROOT_DATA_DIR, DEFAULT_USER } = require('./init');
 const { resolveTemplateVariables } = require('./syntaxEngine');
 const { scanLorebooks } = require('./loreEngine');
+const { stripThoughts } = require('./thoughtEngine');
 
 // --- ФУНКЦИЯ ПОСТОБРАБОТКИ ФИНАЛЬНОГО МАССИВА (STRICT / MERGE) ---
 const applyPostProcessing = (messages, mode) => {
@@ -188,16 +189,10 @@ const buildPrompt = async (payload) => {
     const userName = persona?.name || chat.user_name || 'User';
     const sharedVariables = { local: new Map(), global: new Map() };
 
-    const openTag = preset?.reasoning_open_tag || '<think>';
-    const closeTag = preset?.reasoning_close_tag || '</think>';
-    const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const thinkRegex = new RegExp(`${escapeRegExp(openTag)}[\\s\\S]*?(${escapeRegExp(closeTag)}|$)`, 'gi');
-
-    // Очищаем чат (для сообщений ассистента вырезаем теги мыслей)
     const cleanMessages = chat.messages.map(m => {
         let text = m.mes || '';
-        if (!m.is_user && text.includes(openTag)) {
-            text = text.replace(thinkRegex, '').trim();
+        if (!m.is_user && text) {
+            text = stripThoughts(text, preset);
         }
         return { ...m, mes: text };
     });

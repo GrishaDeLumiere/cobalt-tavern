@@ -3,6 +3,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
 const { addGatewayLog } = require('./llm');
+const { stripThoughts } = require('../system/thoughtEngine');
 
 module.exports = async function (fastify, opts) {
 
@@ -81,28 +82,20 @@ module.exports = async function (fastify, opts) {
             return reply.code(400).send({ error: 'Активное подключение не найдено' });
         }
 
-        let openTag = '<think>';
-        let closeTag = '</think>';
+        let preset = null;
         if (presetId) {
             try {
                 const presetsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'ai_presets');
-                const preset = JSON.parse(await fs.readFile(path.join(presetsDir, `${presetId}.json`), 'utf-8'));
-                if (preset.reasoning_open_tag) openTag = preset.reasoning_open_tag;
-                if (preset.reasoning_close_tag) closeTag = preset.reasoning_close_tag;
+                preset = JSON.parse(await fs.readFile(path.join(presetsDir, `${presetId}.json`), 'utf-8'));
             } catch (e) { }
         }
-
-        const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const thinkRegex = new RegExp(`${escapeRegExp(openTag)}[\\s\\S]*?(${escapeRegExp(closeTag)}|$)`, 'gi');
 
         const maxTokens = Number(config?.max_tokens) || 1500;
         const temperature = config?.temperature !== undefined ? Number(config.temperature) : 0.5;
         const topP = config?.top_p !== undefined ? Number(config.top_p) : 0.95;
         const template = config?.template || "{{dialogue}}";
 
-        const cleanDialogue = dialogueText.includes(openTag)
-            ? dialogueText.replace(thinkRegex, '').trim()
-            : dialogueText;
+        const cleanDialogue = stripThoughts(dialogueText, preset);
 
         const promptText = template.replace('{{dialogue}}', cleanDialogue);
         const url = connection.url.endsWith('/') ? connection.url.slice(0, -1) : connection.url;
@@ -251,9 +244,7 @@ module.exports = async function (fastify, opts) {
                 resultText = data.choices?.[0]?.message?.content || '';
             }
 
-            if (resultText.includes(openTag)) {
-                resultText = resultText.replace(thinkRegex, '').trim();
-            }
+            resultText = stripThoughts(resultText, preset);
 
             if (!resultText.trim()) {
                 throw new Error('ИИ вернул пустой ответ (или весь ответ состоял из блока мыслей)');

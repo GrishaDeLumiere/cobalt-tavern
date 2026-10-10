@@ -1,4 +1,5 @@
 // ФАЙЛ: server/api/providers/google.js
+const { getReasoningTags } = require('../../system/thoughtEngine');
 
 module.exports = {
     _normalize(url, key) {
@@ -385,8 +386,7 @@ module.exports = {
         let errorStatus = null;
         let rawResponseData = null;
 
-        const openTag = prefillTag || '<think>';
-        const closeTag = openTag.replace('<', '</');
+        const { openTag, closeTag } = getReasoningTags({ reasoning_open_tag: prefillTag });
 
         try {
             response = await fetch(endpoint, {

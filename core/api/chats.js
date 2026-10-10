@@ -4,6 +4,7 @@ const fsSync = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { ROOT_DATA_DIR, DEFAULT_USER } = require('../system/init');
+const { cleanForPreview } = require('../system/thoughtEngine');
 
 const getChatsDir = () => path.join(ROOT_DATA_DIR, DEFAULT_USER, 'chats');
 
@@ -62,22 +63,6 @@ const buildChatsIndex = async () => {
         }
     } catch (e) { }
 
-    let customTagsRegExps = [];
-    try {
-        const aiRaw = await fs.readFile(path.join(ROOT_DATA_DIR, DEFAULT_USER, 'ai_settings.json'), 'utf-8');
-        const aiData = JSON.parse(aiRaw);
-        if (Array.isArray(aiData?.presets)) {
-            aiData.presets.forEach(p => {
-                if (p.reasoning_open_tag && p.reasoning_open_tag !== '<think>') {
-                    const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const O = escapeRegExp(p.reasoning_open_tag);
-                    const C = p.reasoning_close_tag ? escapeRegExp(p.reasoning_close_tag) : O.replace('<', '</');
-                    customTagsRegExps.push(new RegExp(`${O}[\\s\\S]*?(${C}|$)`, 'g'));
-                }
-            });
-        }
-    } catch (e) { }
-
     try {
         const charDirs = await fs.readdir(chatsDir, { withFileTypes: true });
         for (const dirent of charDirs) {
@@ -111,12 +96,15 @@ const buildChatsIndex = async () => {
                                 if (msgsCount > 0) {
                                     const lastMsg = JSON.parse(lines[lines.length - 1]);
 
-                                    let cleanMes = lastMsg.mes || '';
-                                    cleanMes = cleanMes.replace(/<(think|thought|reasoning|details|s)>[\s\S]*?(<\/\1>|$)/gi, '');
-                                    customTagsRegExps.forEach(rx => {
-                                        cleanMes = cleanMes.replace(rx, '');
-                                    });
-                                    preview = cleanMes.replace(/<[^>]+>/g, '').trim().substring(0, 200) || preview;
+                                    let cleanMes = '';
+                                    if (Array.isArray(lastMsg.swipes) && lastMsg.swipes.length > 0) {
+                                        const sId = lastMsg.swipe_id || 0;
+                                        cleanMes = lastMsg.swipes[sId] !== undefined ? lastMsg.swipes[sId] : (lastMsg.mes || '');
+                                    } else {
+                                        cleanMes = lastMsg.mes || '';
+                                    }
+
+                                    preview = cleanForPreview(cleanMes) || preview;
 
                                     let foundDate = parseAnyDate(lastMsg.send_date) || parseAnyDate(lastMsg.gen_finished);
                                     if (!foundDate && lastMsg.swipe_info?.length > 0) {

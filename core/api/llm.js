@@ -1,5 +1,6 @@
 // ФАЙЛ: server/api/llm.js
 const { buildPrompt } = require('../system/promptBuilder');
+const { getReasoningTags } = require('../system/thoughtEngine');
 
 const openaiProvider = require('./providers/openai');
 const googleProvider = require('./providers/google');
@@ -155,7 +156,7 @@ const llmPlugin = async function (fastify, opts) {
             reply.raw.setHeader('Connection', 'keep-alive');
             reply.raw.flushHeaders();
 
-            const openTag = activePreset?.reasoning_open_tag || '<think>';
+            const { openTag } = getReasoningTags(activePreset);
             const usePrefill = activePreset?.reasoning_prefill === true;
 
             if (usePrefill) {
