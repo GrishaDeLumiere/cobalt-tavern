@@ -78,9 +78,9 @@ const injectAuthorNote = (globalNodes, depthNodes, chatMetadata, cleanMessages) 
     };
 
     if (authorNote.position === 'before') {
-        globalNodes.push({ ...notePayload, injection_position: 0, injection_order: -9999 });
+        globalNodes.unshift({ ...notePayload, injection_position: 0 });
     } else if (authorNote.position === 'after') {
-        globalNodes.push({ ...notePayload, injection_position: 0, injection_order: 9999 });
+        globalNodes.push({ ...notePayload, injection_position: 0 });
     } else { // Режим 'depth'
         if (authorNote.interval > 0) {
             const userMsgsCount = cleanMessages.filter(m => m.is_user && !m.is_system && !m.isHidden).length;
@@ -89,6 +89,7 @@ const injectAuthorNote = (globalNodes, depthNodes, chatMetadata, cleanMessages) 
             if (shouldInject) {
                 depthNodes.push({
                     ...notePayload,
+                    injection_position: 1,
                     injection_depth: authorNote.depth || 1,
                     injection_order: 9999
                 });
@@ -223,10 +224,8 @@ const buildPrompt = async (payload) => {
 
     // ИНЖЕКЦИЯ АВТОРСКИХ ЗАМЕТОК
     const injectedData = injectAuthorNote(globalNodes, depthNodes, chat.chat_metadata, cleanMessages);
-
-    // СОРТИРУЕМ УЖЕ ГОТОВЫЙ МАССИВ С УЧЕТОМ ЗАМЕТОК И ЛОРА
-    globalNodes = injectedData.globalNodes.sort((a, b) => a.injection_order - b.injection_order);
-    depthNodes = injectedData.depthNodes.sort((a, b) => a.injection_order - b.injection_order);
+    globalNodes = injectedData.globalNodes;
+    depthNodes = injectedData.depthNodes.sort((a, b) => (a.injection_order || 100) - (b.injection_order || 100));
 
     const rawPayload = [];
 

@@ -27,12 +27,16 @@ module.exports = async function (fastify, opts) {
             const files = await fs.readdir(presetsDir);
             const jsonFiles = files.filter(f => f.endsWith('.json'));
 
-            // Параллельное асинхронное чтение всех пресетов
+          // Параллельное асинхронное чтение всех пресетов
             const loaded = await Promise.all(
                 jsonFiles.map(async (file) => {
                     try {
                         const data = await fs.readFile(path.join(presetsDir, file), 'utf-8');
-                        return JSON.parse(data);
+                        const parsed = JSON.parse(data);
+                        if (parsed && !parsed.id) {
+                            parsed.id = path.parse(file).name;
+                        }
+                        return parsed;
                     } catch (e) {
                         fastify.log.error(`[AI_PRESETS] Ошибка чтения ${file}: ${e.message}`);
                         return null;
@@ -84,22 +88,22 @@ module.exports = async function (fastify, opts) {
 
     // 3. Удаляем файл пресета
     fastify.delete('/ai_presets/:id', async (request, reply) => {
-        const safeId = sanitizeId(request.params.id);
+        const rawId = decodeURIComponent(String(request.params.id || '').trim());
+        const safeId = sanitizeId(rawId);
         if (!safeId) return reply.code(400).send({ error: 'Invalid preset ID' });
 
         const filePath = path.join(presetsDir, `${safeId}.json`);
         try {
             await fs.unlink(filePath);
 
-            // Удаляем из кэша памяти
             if (presetsCache) {
-                presetsCache = presetsCache.filter(p => p.id !== safeId);
+                presetsCache = presetsCache.filter(p => p.id !== safeId && p.id !== rawId);
             }
 
             return { status: 'Preset Deleted', success: true };
         } catch (err) {
             if (err.code === 'ENOENT') {
-                if (presetsCache) presetsCache = presetsCache.filter(p => p.id !== safeId);
+                if (presetsCache) presetsCache = presetsCache.filter(p => p.id !== safeId && p.id !== rawId);
                 return { success: true };
             }
             return reply.code(500).send({ error: 'Failed to delete preset' });
