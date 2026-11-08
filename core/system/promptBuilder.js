@@ -102,31 +102,54 @@ const injectAuthorNote = (globalNodes, depthNodes, chatMetadata, cleanMessages) 
 
 // --- ГЛАВНАЯ ФУНКЦИЯ СБОРКИ ---
 const buildPrompt = async (payload) => {
-    const { chatId, presetId, charId, personaId, sysConfig, postProcessing = 'none' } = payload;
+    const { chatId, presetId, charId, personaId, sysConfig, postProcessing = 'none', activePreset = null, chatData = null } = payload;
 
     const chatsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'chats');
     const presetsDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'ai_presets');
     const charsDataDir = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'characters_data');
     const personasDbPath = path.join(ROOT_DATA_DIR, DEFAULT_USER, 'personas_db.json');
 
-    // 1. Читаем всё с диска (теперь вытаскиваем метадату чата!)
+    // 1. Приоритет данных чата из памяти клиента (защита от гонки записи на диск)
     let chat = { messages: [], character_name: 'System', user_name: 'User', chat_metadata: {} };
-    if (chatId) {
+    if (chatData && Array.isArray(chatData.messages) && chatData.messages.length > 0) {
+        chat = {
+            character_name: chatData.character_name || 'System',
+            user_name: chatData.user_name || 'User',
+            chat_metadata: chatData.chat_metadata || {},
+            messages: [...chatData.messages]
+        };
+    } else if (chatId) {
         try {
-            const chatRaw = await fs.readFile(path.join(chatsDir, decodeURIComponent(chatId)), 'utf-8');
+            let cleanChatId = String(chatId);
+            try { cleanChatId = decodeURIComponent(cleanChatId); } catch (_) { }
+            const chatRaw = await fs.readFile(path.join(chatsDir, cleanChatId), 'utf-8');
             const lines = chatRaw.split('\n').filter(l => l.trim());
-            const meta = JSON.parse(lines[0]);
-            chat.character_name = meta.character_name;
-            chat.user_name = meta.user_name || 'User';
-            chat.chat_metadata = meta.chat_metadata || {};
-            chat.messages = lines.slice(1).map(l => JSON.parse(l));
+            if (lines.length > 0) {
+                const meta = JSON.parse(lines[0]);
+                chat.character_name = meta.character_name;
+                chat.user_name = meta.user_name || 'User';
+                chat.chat_metadata = meta.chat_metadata || {};
+                const parsedMsgs = [];
+                for (let i = 1; i < lines.length; i++) {
+                    try {
+                        parsedMsgs.push(JSON.parse(lines[i]));
+                    } catch (parseErr) {
+                        console.warn(`[BUILDER] Битая строка ${i} пропущена:`, parseErr.message);
+                    }
+                }
+                chat.messages = parsedMsgs;
+            }
         } catch (e) { console.error('[BUILDER] Ошибка чтения чата:', e.message); }
     }
 
-    let preset = null;
-    try {
-        preset = JSON.parse(await fs.readFile(path.join(presetsDir, `${presetId}.json`), 'utf-8'));
-    } catch (e) { throw new Error('Не удалось загрузить AI Preset'); }
+    // 2. Пресет из памяти или чтение с диска
+    let preset = activePreset;
+    if (!preset && presetId) {
+        try {
+            preset = JSON.parse(await fs.readFile(path.join(presetsDir, `${presetId}.json`), 'utf-8'));
+        } catch (e) { throw new Error('Не удалось загрузить AI Preset'); }
+    }
+    if (!preset) throw new Error('AI Preset не передан и не найден на диске');
 
     let character = null;
     try {

@@ -1,7 +1,7 @@
-const DEFAULT_TAGS = ['think', 'thought', 'reasoning', 'details', 's'];
+const DEFAULT_TAGS = ['think', 'thought', 'reasoning', 'details'];
 const DEFAULT_REGEX = new RegExp(
-    `\`*<(${DEFAULT_TAGS.join('|')})[^>]*>[\\s\\S]*?<\\/\\1>\`*|` +
-    `\`*<(${DEFAULT_TAGS.join('|')})[^>]*>[\\s\\S]*$|` +
+    `\`*<(${DEFAULT_TAGS.join('|')})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1>\`*|` +
+    `\`*<(${DEFAULT_TAGS.join('|')})(?:\\s[^>]*)?>[\\s\\S]*$|` +
     `^[\\s\\S]*?<\\/(${DEFAULT_TAGS.join('|')})>\`*`,
     'gi'
 );

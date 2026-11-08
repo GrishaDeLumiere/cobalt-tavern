@@ -117,9 +117,9 @@ const llmPlugin = async function (fastify, opts) {
 
         const {
             chatId, presetId, charId, personaId,
-            connectionId, sysConfig, activePreset
+            connectionId, sysConfig, activePreset,
+            chat: clientChat
         } = request.body;
-
         // 1. Добываем креды подключения из файла (connections.json)
         const fs = require('fs/promises');
         const path = require('path');
@@ -141,10 +141,12 @@ const llmPlugin = async function (fastify, opts) {
             // 2. АКТИВИРУЕМ ЯДРО СБОРКИ ПРОМПТОВ
             const { messages, samplerSettings } = await buildPrompt({
                 chatId,
-                presetId,
+                presetId: presetId || activePreset?.id,
                 charId,
                 personaId,
                 sysConfig,
+                activePreset,
+                chatData: clientChat,
                 postProcessing: connection.postProcessing || 'none'
             });
 
