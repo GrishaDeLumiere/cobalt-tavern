@@ -113,7 +113,7 @@ module.exports = async function (fastify, opts) {
         return chars.map(c => {
             const hasAvatar = c.filename && diskFilesSet.has(c.filename);
             const actualUrl = hasAvatar
-                ? `/data/${DEFAULT_USER}/characters/${encodeURIComponent(c.filename)}?v=${Date.now()}`
+                ? `/data/${DEFAULT_USER}/characters/${encodeURIComponent(c.filename)}`
                 : '';
 
             return { ...c, avatarUrl: actualUrl };
