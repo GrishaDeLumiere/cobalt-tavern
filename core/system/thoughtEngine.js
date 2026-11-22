@@ -1,24 +1,29 @@
-const DEFAULT_TAGS = ['think', 'thought', 'reasoning', 'details'];
-const DEFAULT_REGEX = new RegExp(
-    `\`*<(${DEFAULT_TAGS.join('|')})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1>\`*|` +
-    `\`*<(${DEFAULT_TAGS.join('|')})(?:\\s[^>]*)?>[\\s\\S]*$|` +
-    `^[\\s\\S]*?<\\/(${DEFAULT_TAGS.join('|')})>\`*`,
+const DEFAULT_TAGS = ['think', 'thought', 'reasoning'];
+const DEFAULT_PAIRED_REGEX = new RegExp(
+    `\`*<(${DEFAULT_TAGS.join('|')})(?:\\s[^>]*)?>[\\s\\S]*?(?:<\\/\\1>\`*|$)`,
     'gi'
+);
+const DEFAULT_ORPHAN_CLOSE_REGEX = new RegExp(
+    `^[\\s\\S]*?<\\/(${DEFAULT_TAGS.join('|')})>\`*`,
+    'i'
 );
 
 const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const customRegexCache = new Map();
 
-function getCustomRegex(openTag, closeTag) {
+function getCustomRegexes(openTag, closeTag) {
     const key = `${openTag}_${closeTag}`;
-    let rx = customRegexCache.get(key);
-    if (!rx) {
+    let rxObj = customRegexCache.get(key);
+    if (!rxObj) {
         const O = escapeRegExp(openTag);
         const C = escapeRegExp(closeTag);
-        rx = new RegExp(`\`*${O}[\\s\\S]*?(${C}|$)\`*|^[\\s\\S]*?${C}\`*`, 'gi');
-        customRegexCache.set(key, rx);
+        rxObj = {
+            paired: new RegExp(`\`*${O}[\\s\\S]*?(?:${C}\`*|$)`, 'gi'),
+            orphanClose: new RegExp(`^[\\s\\S]*?${C}\`*`, 'i')
+        };
+        customRegexCache.set(key, rxObj);
     }
-    return rx;
+    return rxObj;
 }
 
 function getReasoningTags(preset) {
@@ -50,11 +55,17 @@ function stripThoughts(text, presetOrOpenTag = '<think>', closeTag = '</think>')
         actualCloseTag = closeTag || (openTag.startsWith('<') ? openTag.replace('<', '</') : '</think>');
     }
 
-    let result = text.replace(DEFAULT_REGEX, '');
+    let result = text.replace(DEFAULT_PAIRED_REGEX, '');
+    if (DEFAULT_ORPHAN_CLOSE_REGEX.test(result)) {
+        result = result.replace(DEFAULT_ORPHAN_CLOSE_REGEX, '');
+    }
 
     if (openTag && openTag !== '<think>') {
-        const customRx = getCustomRegex(openTag, actualCloseTag);
-        result = result.replace(customRx, '');
+        const customRx = getCustomRegexes(openTag, actualCloseTag);
+        result = result.replace(customRx.paired, '');
+        if (customRx.orphanClose.test(result)) {
+            result = result.replace(customRx.orphanClose, '');
+        }
     }
 
     return result.trim();
@@ -63,6 +74,7 @@ function stripThoughts(text, presetOrOpenTag = '<think>', closeTag = '</think>')
 function cleanForPreview(text, presetOrOpenTag, closeTag, maxLength = 200) {
     if (!text) return '';
     let cleaned = stripThoughts(text, presetOrOpenTag, closeTag);
+    cleaned = cleaned.replace(/<(details|nodisplay|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
     cleaned = cleaned.replace(/<[^>]+>/g, '');
     cleaned = cleaned.replace(/^[`\s\r\n]+/, '');
     cleaned = cleaned.replace(/\s+/g, ' ').trim();

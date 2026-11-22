@@ -81,12 +81,8 @@ module.exports = {
         }
 
         const isStreaming = samplers.stream !== false;
-        if (prefillTag) {
-            messages.push({
-                role: 'assistant',
-                content: `${prefillTag}\n`
-            });
-        }
+        const openTag = samplers.reasoning_open_tag || prefillTag || '<think>';
+        const closeTag = samplers.reasoning_close_tag || '</think>';
 
         let processedMessages = [...messages];
 
@@ -131,6 +127,13 @@ module.exports = {
             processedMessages = [...systemMsgs, flattenedUserMsg];
         }
 
+        if (prefillTag) {
+            processedMessages.push({
+                role: 'assistant',
+                content: `${prefillTag}\n`
+            });
+        }
+
         // 3. ОБРАБОТКА КАРТИНОК (VISION) С УЧЕТОМ ГАЛОЧКИ
         const finalMessages = processedMessages.map(msg => {
             if (msg.images && msg.images.length > 0 && samplers.send_attachments !== false) {
@@ -161,6 +164,8 @@ module.exports = {
             if (effort === 'min') effort = 'low';
             if (effort === 'max') effort = 'high';
             payload.reasoning_effort = effort;
+            payload.include_reasoning = true;
+            payload.chat_template_kwargs = { enable_thinking: true };
         }
 
         // ==========================================
@@ -210,7 +215,16 @@ module.exports = {
             try {
                 const data = await response.json();
                 rawResponseData = data; // Сохраняем сырой ответ
-                fullGeneratedText = data.choices?.[0]?.message?.content || '';
+                const msg = data.choices?.[0]?.message;
+                const thoughtText = msg?.reasoning_content || msg?.reasoning || '';
+                const outputText = msg?.content || '';
+
+                if (thoughtText) {
+                    const prefix = prefillTag ? '' : `${openTag}\n`;
+                    fullGeneratedText = `${prefix}${thoughtText}\n${closeTag}\n\n${outputText}`;
+                } else {
+                    fullGeneratedText = outputText;
+                }
 
                 if (!replyRaw.writableEnded) {
                     replyRaw.write(`data: ${JSON.stringify({ chunk: fullGeneratedText })}\n\n`);
@@ -238,6 +252,7 @@ module.exports = {
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
+        let inThoughtStep = false;
 
         try {
             while (true) {
@@ -253,15 +268,50 @@ module.exports = {
                     if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
                         try {
                             const data = JSON.parse(trimmed.slice(6));
-                            const chunk = data.choices?.[0]?.delta?.content;
-                            if (chunk !== undefined && chunk !== null) {
-                                fullGeneratedText += chunk; // Накапливаем текст стрима
+                            const delta = data.choices?.[0]?.delta;
+                            if (!delta) continue;
+
+                            const reasoningChunk = delta.reasoning_content ?? delta.reasoning;
+                            const contentChunk = delta.content;
+
+                            if (reasoningChunk !== undefined && reasoningChunk !== null && reasoningChunk !== '') {
+                                let outChunk = '';
+                                if (!inThoughtStep) {
+                                    inThoughtStep = true;
+                                    if (!prefillTag) {
+                                        outChunk += `${openTag}\n`;
+                                    }
+                                }
+                                outChunk += reasoningChunk;
+                                fullGeneratedText += outChunk;
                                 if (!replyRaw.writableEnded) {
-                                    replyRaw.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                                    replyRaw.write(`data: ${JSON.stringify({ chunk: outChunk })}\n\n`);
+                                }
+                            }
+
+                            if (contentChunk !== undefined && contentChunk !== null && contentChunk !== '') {
+                                let outChunk = '';
+                                if (inThoughtStep) {
+                                    inThoughtStep = false;
+                                    outChunk += `\n${closeTag}\n\n`;
+                                }
+                                outChunk += contentChunk;
+                                fullGeneratedText += outChunk;
+                                if (!replyRaw.writableEnded) {
+                                    replyRaw.write(`data: ${JSON.stringify({ chunk: outChunk })}\n\n`);
                                 }
                             }
                         } catch (e) { }
                     }
+                }
+            }
+
+            if (inThoughtStep) {
+                inThoughtStep = false;
+                const closeChunk = `\n${closeTag}\n\n`;
+                fullGeneratedText += closeChunk;
+                if (!replyRaw.writableEnded) {
+                    replyRaw.write(`data: ${JSON.stringify({ chunk: closeChunk })}\n\n`);
                 }
             }
         } catch (err) {

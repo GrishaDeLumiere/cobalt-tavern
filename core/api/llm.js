@@ -158,7 +158,7 @@ const llmPlugin = async function (fastify, opts) {
             reply.raw.setHeader('Connection', 'keep-alive');
             reply.raw.flushHeaders();
 
-            const { openTag } = getReasoningTags(activePreset);
+            const { openTag, closeTag } = getReasoningTags(activePreset);
             const usePrefill = activePreset?.reasoning_prefill === true;
 
             if (usePrefill) {
@@ -175,6 +175,8 @@ const llmPlugin = async function (fastify, opts) {
                 samplers: {
                     ...samplerSettings,
                     reasoning_effort: activePreset?.reasoning_effort || 'auto',
+                    reasoning_open_tag: openTag,
+                    reasoning_close_tag: closeTag,
                     send_attachments: activePreset?.send_attachments !== false,
                     google_advanced_safety: activePreset?.google_advanced_safety === true,
                     google_send_safety: activePreset?.google_send_safety !== false,

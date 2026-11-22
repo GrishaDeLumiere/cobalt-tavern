@@ -96,15 +96,21 @@ const buildChatsIndex = async () => {
                                 if (msgsCount > 0) {
                                     const lastMsg = JSON.parse(lines[lines.length - 1]);
 
-                                    let cleanMes = '';
-                                    if (Array.isArray(lastMsg.swipes) && lastMsg.swipes.length > 0) {
-                                        const sId = lastMsg.swipe_id || 0;
-                                        cleanMes = lastMsg.swipes[sId] !== undefined ? lastMsg.swipes[sId] : (lastMsg.mes || '');
-                                    } else {
-                                        cleanMes = lastMsg.mes || '';
+                                    for (let i = lines.length - 1; i >= 1; i--) {
+                                        try {
+                                            const msgObj = i === lines.length - 1 ? lastMsg : JSON.parse(lines[i]);
+                                            if (msgObj.is_system) continue;
+                                            const sId = msgObj.swipe_id || 0;
+                                            const rawMes = (Array.isArray(msgObj.swipes) && msgObj.swipes.length > 0)
+                                                ? (msgObj.swipes[sId] || msgObj.mes || '')
+                                                : (msgObj.mes || '');
+                                            const cleanedPreview = cleanForPreview(rawMes);
+                                            if (cleanedPreview) {
+                                                preview = cleanedPreview;
+                                                break;
+                                            }
+                                        } catch (e) { }
                                     }
-
-                                    preview = cleanForPreview(cleanMes) || preview;
 
                                     let foundDate = parseAnyDate(lastMsg.send_date) || parseAnyDate(lastMsg.gen_finished);
                                     if (!foundDate && lastMsg.swipe_info?.length > 0) {
@@ -364,6 +370,7 @@ module.exports = async function (fastify, opts) {
             });
             const msgLines = payload.messages?.map(m => JSON.stringify(m)).join('\n') || '';
             await fs.writeFile(filePath, msgLines ? `${metaLine}\n${msgLines}\n` : `${metaLine}\n`, 'utf-8');
+            fileMetaCache.delete(filePath);
             serverChatsCache = null;
             return { success: true };
         } catch (e) {
